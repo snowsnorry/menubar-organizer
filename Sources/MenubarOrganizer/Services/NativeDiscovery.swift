@@ -156,14 +156,7 @@ enum NativeDiscovery {
                 // position store before a write.
                 let positionKey: String?
                 if bundle == "com.apple.controlcenter" || bundle == "com.apple.MenuBarAgent" {
-                    let modules: [String: String] = [
-                        "FocusModes": "module:FocusModes", "Battery": "module:Battery",
-                        "Bluetooth": "module:Bluetooth", "Clock": "module:Clock",
-                        "Displays": "module:Displays", "KeyboardBrightness": "module:KeyboardBrightness",
-                        "Sound": "module:Sound", "WiFi": "module:WiFi",
-                        "ScreenMirroring": "module:ScreenMirroring", "BentoBox": "module:BentoBox-0"
-                    ]
-                    let matches = Set(metadata.compactMap { modules[$0] })
+                    let matches = SystemMenuItemKind.modulePositionKeys(metadata: metadata)
                     if matches.count == 1 {
                         positionKey = matches.first
                     } else if matches.isEmpty, kind == .focus,

@@ -18,4 +18,12 @@ final class SystemMenuItemKindTests: XCTestCase {
         XCTAssertNil(SystemMenuItemKind.identify(bundleID: "com.apple.systemuiserver", metadata: []))
         XCTAssertNil(SystemMenuItemKind.identify(bundleID: "third.party", metadata: ["Time Machine"]))
     }
+
+    func testWiFiPositionKeyRequiresExactIdentifier() {
+        XCTAssertEqual(SystemMenuItemKind.modulePositionKeys(metadata: ["com.apple.controlcenter", "com.apple.controlcenter.WiFi"]), ["module:WiFi"])
+        XCTAssertEqual(SystemMenuItemKind.modulePositionKeys(metadata: ["com.apple.menuextra.wifi", "Wi‑Fi, connected, 3 bars"]), ["module:WiFi"])
+        XCTAssertEqual(SystemMenuItemKind.modulePositionKeys(metadata: ["WiFi", "com.apple.controlcenter.WiFi"]), ["module:WiFi"])
+        XCTAssertTrue(SystemMenuItemKind.modulePositionKeys(metadata: ["com.apple.controlcenter.WiFi.Other"]).isEmpty)
+        XCTAssertEqual(SystemMenuItemKind.modulePositionKeys(metadata: ["com.apple.controlcenter.WiFi", "Battery"]), ["module:WiFi", "module:Battery"])
+    }
 }

@@ -31,6 +31,21 @@ public enum SystemMenuItemKind: String, CaseIterable, Sendable {
         }
     }
 
+    /// Match only known AX identifiers to a single position-table module.
+    /// A display name may identify an icon without identifying its table key.
+    public static func modulePositionKeys(metadata: [String]) -> Set<String> {
+        let modules: [String: String] = [
+            "FocusModes": "module:FocusModes", "Battery": "module:Battery",
+            "Bluetooth": "module:Bluetooth", "Clock": "module:Clock",
+            "Displays": "module:Displays", "KeyboardBrightness": "module:KeyboardBrightness",
+            "Sound": "module:Sound", "WiFi": "module:WiFi",
+            "com.apple.controlcenter.WiFi": "module:WiFi",
+            "com.apple.menuextra.wifi": "module:WiFi",
+            "ScreenMirroring": "module:ScreenMirroring", "BentoBox": "module:BentoBox-0"
+        ]
+        return Set(metadata.compactMap { modules[$0] })
+    }
+
     public static func identify(bundleID: String, metadata: [String]) -> Self? {
         guard bundleID.hasPrefix("com.apple.") else { return nil }
         switch bundleID {
