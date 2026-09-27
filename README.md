@@ -1,0 +1,49 @@
+# Menubar Organizer
+
+Menubar Organizer is a native macOS menu bar utility for arranging status items and temporarily revealing hidden items. It provides a settings window in English and Russian, stores the layout locally, and includes a configurable reveal timer and login option.
+
+The app currently targets macOS 27.0 and requires Xcode 27.0 with Command Line Tools to build. It has no network dependencies. Menu bar visibility uses a private system interface tested on build 26A428, so behavior on other builds is not established.
+
+## Build and run
+
+To build an application bundle without installing it:
+
+```sh
+./script/build_and_run.sh --app-build
+```
+
+To build, install in `/Applications`, and launch the app:
+
+```sh
+./script/build_and_run.sh --app
+```
+
+The install command replaces only an existing app with the same bundle ID. If you want to inspect the settings without reading or changing the actual menu bar or saved layout, build first and then run:
+
+```sh
+open -n dist/MenubarOrganizer.app --args --preview
+```
+
+To read and rearrange menu bar items, grant Menubar Organizer access in **System Settings → Privacy & Security → Accessibility**. Rebuilding with an ad hoc signature may require you to renew that permission. Set `SIGN_IDENTITY` to an available signing identity if you need a stable signature.
+
+## Behavior and current limits
+
+The settings window groups items as visible or hidden. Edits remain a draft until you press **OK**; **Cancel** or closing the window discards them. Reordering uses the system Command-drag gesture only after **OK**. Items can also be moved with the inspector controls. Missing apps keep their saved positions, while newly discovered apps remain visible.
+
+Clicking the `…` status item or pressing Command-Shift-H reveals hidden items. The default reveal interval is five seconds. Hovering over the menu bar or opening a menu pauses the timer. Some menus do not send reliable accessibility notifications, so dismissal with Escape can leave items visible until the next click outside the menu bar.
+
+The private visibility interface is limited to the tested OS build. Some system items have only partial support: the Focus icon may disappear while a visibility filter is active, and Time Machine filtering affects its host process as a whole. Reordering is deferred when an item is overflowing, its coordinates cannot be verified, or a protected item blocks the path. Processes without a bundle ID require separate consent for the current session.
+
+End-to-end system acceptance is still in progress. In particular, direct status-item clicking, login behavior, two-display changes, and recovery from every interruption need further manual verification. A successful build or unit test does not establish those behaviors.
+
+## Avoiding conflicts with other menu bar managers
+
+Before enabling visibility filtering, the app checks running applications against known menu bar manager names and bundle identifiers, including Bartender. It refuses to activate the filter when it finds one. This check prevents two applications from changing menu bar visibility at the same time. It covers the known identifiers in the source code; close any other menu bar manager before enabling filtering.
+
+## Tests
+
+```sh
+swift test --disable-sandbox
+```
+
+The `Sources/MenubarOrganizer` target contains the app and its system adapter. `Sources/OrganizerCore` contains the layout model and rules. The tests in `Tests/OrganizerCoreTests` cover those rules without altering the menu bar.

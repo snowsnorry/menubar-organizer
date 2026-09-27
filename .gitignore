@@ -1,0 +1,22 @@
+# Local research, downloaded references, and diagnostic reports
+/Experiments/
+
+# SwiftPM and Xcode output
+/.build/
+/.swiftpm/
+/dist/
+/DerivedData/
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/
+
+# Local machine and editor state
+/.codex/
+.DS_Store
+*.swp
+*~
+
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
