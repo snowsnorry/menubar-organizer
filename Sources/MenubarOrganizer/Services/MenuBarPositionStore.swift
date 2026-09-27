@@ -19,7 +19,7 @@ final class MenuBarPositionStore {
     private var grantedURL: URL?
     private var scoped = false
 
-    func ensureAccess() throws {
+    func ensureAccess(promptIfNeeded: Bool = true) throws {
         if let grantedURL {
             if (try? Data(contentsOf: grantedURL)) != nil { return }
             closeAccess()
@@ -44,6 +44,7 @@ final class MenuBarPositionStore {
             scoped = false
             return
         }
+        guard promptIfNeeded else { throw Failure.accessRequired }
         let panel = NSOpenPanel()
         panel.title = L10n.text("positionAccess.title")
         panel.message = L10n.text("positionAccess.message")

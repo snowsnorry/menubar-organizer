@@ -58,7 +58,7 @@ final class NativeBackend: LayoutBackend {
         return updated
     }
 
-    /// Only the explicit OK action may open this short-lived session.
+    /// Only explicit OK or restoring the saved order at launch may open this session.
     func beginExplicitReordering() throws {
         guard !stopped, explicitReorderingGeneration == nil else { throw MoveError.unavailable }
         gestureGeneration &+= 1
@@ -70,7 +70,9 @@ final class NativeBackend: LayoutBackend {
         gestureGeneration &+= 1
     }
 
-    func preparePositionTableAccess() throws { try positionStore.ensureAccess() }
+    func preparePositionTableAccess(promptIfNeeded: Bool = true) throws {
+        try positionStore.ensureAccess(promptIfNeeded: promptIfNeeded)
+    }
 
     func cancelGestures() { endExplicitReordering() }
 

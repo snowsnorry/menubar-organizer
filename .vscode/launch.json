@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:menubar-organizer}",
+            "name": "Debug MenubarOrganizer",
+            "target": "MenubarOrganizer",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug MenubarOrganizer"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:menubar-organizer}",
+            "name": "Release MenubarOrganizer",
+            "target": "MenubarOrganizer",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release MenubarOrganizer"
+        }
+    ]
+}

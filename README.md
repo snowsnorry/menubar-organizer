@@ -28,9 +28,11 @@ To read and rearrange menu bar items, grant Menubar Organizer access in **System
 
 ## Behavior and current limits
 
-The settings window groups items as visible or hidden. Edits remain a draft until you press **OK**; **Cancel** or closing the window discards them. Reordering uses the system Command-drag gesture only after **OK**. Items can also be moved with the inspector controls. Missing apps keep their saved positions, while newly discovered apps remain visible.
+The settings window groups items as visible or hidden. Edits remain a draft until you press **OK**; **Cancel** or closing the window discards them. Reordering edits the system menu bar position table after **OK** or while restoring a saved layout at launch. Items can also be moved with the inspector controls. Missing apps keep their saved positions, while newly discovered apps remain visible.
 
-Clicking the `…` status item or pressing Command-Shift-H reveals hidden items. The default reveal interval is five seconds. Hovering over the menu bar or opening a menu pauses the timer. Some menus do not send reliable accessibility notifications, so dismissal with Escape can leave items visible until the next click outside the menu bar.
+At launch, the app restores the saved order before hiding saved hidden items. If access to the system position table is unavailable, it applies hiding and keeps the saved order for a later retry without opening a permission dialog during startup.
+
+Clicking the `…` status item or pressing Command-Shift-H reveals hidden items; clicking it again hides them. The default inactivity interval is five seconds. Moving the pointer in the menu bar restarts the interval, while an open menu pauses it. Some menus do not send reliable accessibility notifications, so dismissal with Escape can leave items visible until the next click outside the menu bar.
 
 The private visibility interface is limited to the tested OS build. Some system items have only partial support: the Focus icon may disappear while a visibility filter is active, and Time Machine filtering affects its host process as a whole. Reordering is deferred when an item is overflowing, its coordinates cannot be verified, or a protected item blocks the path. Processes without a bundle ID require separate consent for the current session.
 

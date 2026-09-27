@@ -15,6 +15,7 @@ final class OrganizerAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegat
     private var observingMenus = false
     private var observedExternalMenuOpen = false
     private var menuInteraction = false
+    private var lastPointerInMenuBar: NSPoint?
     private var ownMenuOpen = false
     private var terminating = false
 
@@ -77,8 +78,14 @@ final class OrganizerAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegat
             }
         }
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] event in
+            guard let self else { return event }
+            // The control handles its own click. It cannot open an external menu.
+            if event.window === self.statusItem.button?.window {
+                self.menuInteraction = false
+                self.observedExternalMenuOpen = false
+                return event
+            }
             Task { @MainActor in
-                guard let self else { return }
                 self.menuInteraction = self.pointerInMenuBar()
                 await self.updateInteraction()
             }
@@ -162,6 +169,10 @@ final class OrganizerAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegat
 
     private func updateInteraction() async {
         guard model != nil, !terminating else { return }
+        let pointer = NSEvent.mouseLocation
+        let pointerInside = pointerInMenuBar()
+        let movedInside = pointerInside && lastPointerInMenuBar != nil && lastPointerInMenuBar != pointer
+        lastPointerInMenuBar = pointerInside ? pointer : nil
         if model.accessibilityGranted && !model.isPreview {
             if !observingMenus { menuObserver.start(); observingMenus = true }
         } else if observingMenus {
@@ -169,7 +180,8 @@ final class OrganizerAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegat
             menuInteraction = menuInteraction || observedExternalMenuOpen
             observedExternalMenuOpen = false
         }
-        await model.interaction(pointerInside: pointerInMenuBar(), menuOpen: ownMenuOpen || observedExternalMenuOpen || menuInteraction)
+        await model.interaction(pointerInside: pointerInside, menuOpen: ownMenuOpen || observedExternalMenuOpen || menuInteraction)
+        if movedInside { await model.noteMenuBarActivity() }
     }
 
     private func installLifecycle() {

@@ -73,6 +73,22 @@ public actor LayoutCoordinator {
         return result
     }
 
+    /// Restore saved order while every item is visible, then apply saved hiding.
+    /// Hiding first would remove its targets from discovery and prevent moves.
+    public func restoreSavedLayout(_ document: LayoutDocument) async -> LayoutApplyReport {
+        let orderingGeneration = generation &+ 1
+        let ordering = await apply(document, revealed: true, allowReordering: true)
+        guard generation == orderingGeneration, ordering.status != .superseded else { return ordering }
+        var visibility = await apply(document, allowReordering: false)
+        if visibility.status == .applied, ordering.status != .applied {
+            visibility.status = .partial
+            visibility.error = ordering.error ?? "nonintrusiveReorderingUnavailable"
+            visibility.movedCount = ordering.movedCount
+            visibility.deferredIDs = ordering.deferredIDs
+        }
+        return visibility
+    }
+
     private struct VerificationFailure: Error { }
 
     private func observedIDs(_ observations: [DiscoveredItem]) -> [String] {

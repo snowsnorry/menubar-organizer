@@ -42,6 +42,7 @@ final class SettingsModel {
     @ObservationIgnored private var confirming = false
     @ObservationIgnored private var lifecycleSuspended = false
     @ObservationIgnored private var pendingRestore = false
+    @ObservationIgnored private var pendingLaunchOrderRestore = false
     @ObservationIgnored private var requiresManualRetry = UserDefaults.standard.bool(forKey: manualRetryKey)
     @ObservationIgnored private var restoreRevision: UInt64 = 0
     @ObservationIgnored private var refreshAfterBusy = false
@@ -115,7 +116,7 @@ final class SettingsModel {
             loaded = true
         } catch { statusMessage = L10n.text("status.loadFailed"); return }
         // Launch is read-only until discovery and permissions are verified.
-        await refresh(adoptObserved: false, restoreSaved: true)
+        await refresh(adoptObserved: false, restoreSaved: true, restoreSavedOrder: true)
     }
 
     func icon(for item: RegistryItem) -> NSImage? {
@@ -143,8 +144,10 @@ final class SettingsModel {
         }
     }
 
-    func refresh(adoptObserved: Bool = true, restoreSaved: Bool = false) async {
+    func refresh(adoptObserved: Bool = true, restoreSaved: Bool = false,
+                 restoreSavedOrder: Bool = false) async {
         guard !stopped, !isPreview else { return }
+        if restoreSavedOrder { pendingLaunchOrderRestore = true }
         // Record lifecycle/start intent before the busy/permission guards. The
         // next successful manual refresh must not erase an unfulfilled layout.
         if restoreSaved {
@@ -164,10 +167,14 @@ final class SettingsModel {
         isBusy = true
         revision &+= 1
         let token = revision
+        var savedOrderNeedsRestore = false
         do {
             let observations = try await backend.discover()
             guard !stopped, token == revision else { return }
             var snapshot = try ItemRegistry.reconcile(observations, with: draft.committed)
+            if pendingLaunchOrderRestore {
+                savedOrderNeedsRestore = savedOrderDiffers(from: observations, snapshot: snapshot)
+            }
             // Passive refresh adopts only directly verified, unambiguous order.
             // It never sends a reorder back to the user's menu bar.
             for group in ItemGroup.allCases where adoptObserved && !pendingRestore && !editing {
@@ -202,10 +209,41 @@ final class SettingsModel {
             // No await separates releasing this discovery operation from taking
             // the apply busy state; a queued lifecycle refresh drains afterward.
             isBusy = false
-            await applyLayout()
+            if pendingLaunchOrderRestore {
+                var restored = false
+                if savedOrderNeedsRestore {
+                    do {
+                        try backend.preparePositionTableAccess(promptIfNeeded: false)
+                        try backend.beginExplicitReordering()
+                        defer { backend.endExplicitReordering() }
+                        restored = await applyLayout(allowReordering: true, explicit: true,
+                                                     restoreOrderBeforeHiding: true)
+                    } catch {
+                        let visibilityApplied = await applyLayout(explicit: true, preserveSavedOrder: true)
+                        pendingRestore = true
+                        if visibilityApplied { statusMessage = L10n.text("status.orderSavedNotApplied") }
+                    }
+                } else {
+                    restored = await applyLayout(explicit: true, preserveSavedOrder: true)
+                }
+                pendingLaunchOrderRestore = !restored
+            } else {
+                await applyLayout()
+            }
         } else {
             finishBusy(token: token)
         }
+    }
+
+    private func savedOrderDiffers(from observations: [DiscoveredItem], snapshot: RegistrySnapshot) -> Bool {
+        let present = Set(observations.compactMap(ItemRegistry.observationID))
+        for group in ItemGroup.allCases {
+            let desired = snapshot.layout.entries(in: group).map(\.id).filter { present.contains($0) }
+            let members = Set(desired)
+            let observed = observations.compactMap(ItemRegistry.observationID).filter { members.contains($0) }
+            if observed != desired { return true }
+        }
+        return false
     }
 
     func runningApplicationsChanged(launchedBundleID: String?) async {
@@ -546,7 +584,9 @@ final class SettingsModel {
     }
 
     @discardableResult
-    private func applyLayout(allowReordering: Bool = false, explicit: Bool = false) async -> Bool {
+    private func applyLayout(allowReordering: Bool = false, explicit: Bool = false,
+                             restoreOrderBeforeHiding: Bool = false,
+                             preserveSavedOrder: Bool = false) async -> Bool {
         guard !stopped else { return false }
         var applied = false
         isBusy = true
@@ -559,9 +599,11 @@ final class SettingsModel {
         }
         await serialize { [self] in
             guard token == revision else { return }
-            let report = await coordinator.apply(requested,
-                revealed: !explicit && reveal.state != .collapsed,
-                allowReordering: allowReordering)
+            let report = restoreOrderBeforeHiding
+                ? await coordinator.restoreSavedLayout(requested)
+                : await coordinator.apply(requested,
+                    revealed: !explicit && reveal.state != .collapsed,
+                    allowReordering: allowReordering)
             guard token == revision, !stopped else { return }
             if let snapshot = report.snapshot {
                 items = snapshot.items
@@ -571,8 +613,9 @@ final class SettingsModel {
             // the proposed order has already been saved. Reconcile only the
             // actually observed, movable visible rows so the list does not
             // continue to claim that an unsuccessful reorder took effect.
-            if (allowReordering && (report.status == .failed || report.status == .partial)) ||
-                (!allowReordering && report.status == .applied),
+            if (allowReordering && !restoreOrderBeforeHiding &&
+                (report.status == .failed || report.status == .partial)) ||
+                (!allowReordering && !preserveSavedOrder && report.status == .applied),
                let snapshot = report.snapshot {
                 let movable = Set(snapshot.items.filter { $0.entry.group == .visible && $0.canReorder }.map(\.id))
                 let observed = report.observedOrder.filter { movable.contains($0) }
@@ -683,6 +726,11 @@ final class SettingsModel {
         let effects = reveal.setMenuOpen(menuOpen, now: now)
             + reveal.setPointerInInteractionRegion(pointerInside, now: now)
         await run(effects)
+    }
+
+    func noteMenuBarActivity() async {
+        guard loaded, !stopped, !isPreview else { return }
+        await run(reveal.noteActivity(now: now))
     }
 
     func resumeLifecycle() async {

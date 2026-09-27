@@ -127,6 +127,35 @@ final class LayoutCoordinatorTests: XCTestCase {
         XCTAssertEqual(events, ["discover", "visibility", "discover", "move", "discover", "move", "discover"])
     }
 
+    func testStartupRestoreMovesSavedOrderBeforeHidingItems() async {
+        let a = item("a"), b = item("b"), c = item("c")
+        let backend = FakeLayoutBackend([c, b, a])
+        await backend.omitHiddenFromDiscovery()
+        let saved = document([a, b, c], hidden: ["b"])
+
+        let report = await LayoutCoordinator(backend: backend).restoreSavedLayout(saved)
+        let order = await backend.observedIDs()
+        let visibility = await backend.visibilityRequests()
+
+        XCTAssertEqual(report.status, .applied)
+        XCTAssertEqual(order, document([a, c, b]).entries.map(\.id))
+        XCTAssertEqual(visibility, [[], ["org.b"]])
+    }
+
+    func testStartupRestoreStillHidesItemsWhenReorderingFails() async {
+        let a = item("a"), b = item("b"), c = item("c")
+        let backend = FakeLayoutBackend([c, b, a])
+        await backend.configure(failMoveAt: 1)
+        let saved = document([a, b, c], hidden: ["b"])
+
+        let report = await LayoutCoordinator(backend: backend).restoreSavedLayout(saved)
+        let visibility = await backend.visibilityRequests()
+
+        XCTAssertEqual(report.status, .partial)
+        XCTAssertTrue(report.visibilityApplied)
+        XCTAssertEqual(visibility.last, ["org.b"])
+    }
+
     func testFirstToLastRotationUsesOneVerifiedMove() async {
         let a = item("a"), b = item("b"), c = item("c"), d = item("d")
         let backend = FakeLayoutBackend([a, b, c, d])

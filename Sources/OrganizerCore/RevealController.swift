@@ -138,9 +138,7 @@ public struct RevealController: Sendable {
         return [.showHidden] + restartTimer(now: now)
     }
 
-    private var isInteracting: Bool {
-        isPointerInInteractionRegion || isMenuOpen
-    }
+    private var isInteracting: Bool { isMenuOpen }
 
     private mutating func interactionChanged(now: Double) -> [Effect] {
         guard state == .revealed else { return [] }

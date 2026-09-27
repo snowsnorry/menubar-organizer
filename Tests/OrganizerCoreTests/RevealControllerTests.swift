@@ -38,18 +38,30 @@ final class RevealControllerTests: XCTestCase {
         XCTAssertEqual(controller.noteActivity(now: 10), [])
     }
 
-    func testOverlappingHoverAndMenuPauseUntilBothEnd() {
+    func testOpenMenuPausesTimeoutWhilePointerChanges() {
         var controller = RevealController()
         _ = controller.toggle(now: 0)
-        XCTAssertEqual(controller.setPointerInInteractionRegion(true, now: 4), [.cancelTimer])
-        XCTAssertEqual(controller.setMenuOpen(true, now: 5), [])
+        XCTAssertEqual(controller.setPointerInInteractionRegion(true, now: 4),
+                       [.cancelTimer, .schedule(deadline: 9, token: 2)])
+        XCTAssertEqual(controller.setMenuOpen(true, now: 5), [.cancelTimer])
         XCTAssertEqual(controller.timerFired(token: 1, now: 6), [])
         XCTAssertEqual(controller.setPointerInInteractionRegion(false, now: 7), [])
         XCTAssertNil(controller.deadline)
         XCTAssertEqual(controller.noteActivity(now: 40), [])
-        XCTAssertEqual(controller.setMenuOpen(false, now: 100), [.schedule(deadline: 105, token: 2)])
+        XCTAssertEqual(controller.setMenuOpen(false, now: 100), [.schedule(deadline: 105, token: 3)])
         XCTAssertEqual(controller.setMenuOpen(false, now: 101), [])
-        XCTAssertEqual(controller.timerFired(token: 2, now: 105), [.cancelTimer, .hideHidden])
+        XCTAssertEqual(controller.timerFired(token: 3, now: 105), [.cancelTimer, .hideHidden])
+    }
+
+    func testStationaryHoverExpiresAndMovementRestartsTimeout() {
+        var controller = RevealController()
+        _ = controller.toggle(now: 0)
+        XCTAssertEqual(controller.setPointerInInteractionRegion(true, now: 1),
+                       [.cancelTimer, .schedule(deadline: 6, token: 2)])
+        XCTAssertEqual(controller.noteActivity(now: 4),
+                       [.cancelTimer, .schedule(deadline: 9, token: 3)])
+        XCTAssertEqual(controller.timerFired(token: 2, now: 6), [])
+        XCTAssertEqual(controller.timerFired(token: 3, now: 9), [.cancelTimer, .hideHidden])
     }
 
     func testMenuAlreadyOpenWhenRevealedNeverSchedulesTimeout() {
@@ -164,7 +176,7 @@ final class RevealControllerTests: XCTestCase {
         var controller = RevealController()
         _ = controller.toggle(now: 0)
         _ = controller.setPointerInInteractionRegion(true, now: 1)
-        XCTAssertEqual(controller.toggle(now: 2), [.hideHidden])
+        XCTAssertEqual(controller.toggle(now: 2), [.cancelTimer, .hideHidden])
         XCTAssertEqual(controller.state, .collapsed)
         XCTAssertFalse(controller.pendingCollapse)
     }
