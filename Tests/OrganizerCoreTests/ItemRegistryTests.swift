@@ -233,9 +233,10 @@ final class ItemRegistryTests: XCTestCase {
     }
 
     func testSupportedModuleTargetsUseExactPositionKeysAndIndependentGroups() throws {
-        let names = ["Battery", "Bluetooth", "Clock", "Displays", "KeyboardBrightness",
-                     "Sound", "WiFi", "ScreenMirroring", "BentoBox-0"]
-        for (index, name) in names.enumerated() {
+        let targets = [("Battery", 0), ("Bluetooth", 1), ("Displays", 3),
+                       ("KeyboardBrightness", 4), ("Sound", 5), ("WiFi", 6),
+                       ("ScreenMirroring", 7)]
+        for (name, index) in targets {
             let entry = LayoutEntry(id: "system-position:module:\(name)", bundleID: "com.apple.controlcenter", name: name)
             XCTAssertEqual(ItemRegistry.systemVisibilityTarget(for: entry), "system-item:\(index)")
             XCTAssertNil(ItemRegistry.systemVisibilityTarget(for: LayoutEntry(id: entry.id,
@@ -243,6 +244,10 @@ final class ItemRegistryTests: XCTestCase {
         }
         XCTAssertNil(ItemRegistry.systemVisibilityTarget(for: LayoutEntry(
             id: "system-position:module:FocusModes", bundleID: "com.apple.controlcenter", name: "Focus")))
+        for name in ["Clock", "BentoBox-0"] {
+            XCTAssertNil(ItemRegistry.systemVisibilityTarget(for: LayoutEntry(
+                id: "system-position:module:\(name)", bundleID: "com.apple.controlcenter", name: name)))
+        }
 
         let battery = DiscoveredItem(bundleID: "com.apple.controlcenter", identifier: nil,
             name: "Battery", positionTableKey: "module:Battery")
@@ -251,7 +256,9 @@ final class ItemRegistryTests: XCTestCase {
         let focus = DiscoveredItem(bundleID: "com.apple.controlcenter", identifier: nil,
             name: "Focus", positionTableKey: "module:FocusModes")
         let initial = try ItemRegistry.reconcile([battery, clock, focus], with: LayoutDocument())
-        XCTAssertEqual(initial.items.map(\.canSetVisibility), [true, true, false])
+        XCTAssertEqual(initial.items.map(\.canSetVisibility), [true, false, false])
+        XCTAssertFalse(initial.items[1].canReorder)
+        XCTAssertTrue(initial.items[1].isPinnedSystemItem)
         let hidden = try LayoutEditor.move("system-position:module:Battery", to: .hidden, at: 0, in: initial.layout)
         XCTAssertEqual(hidden.entries(in: .hidden).map(\.id), ["system-position:module:Battery"])
         XCTAssertEqual(hidden.entries(in: .visible).map(\.id),
@@ -260,6 +267,24 @@ final class ItemRegistryTests: XCTestCase {
         let refreshed = try ItemRegistry.reconcile([battery, clock, focus], with: hidden)
         XCTAssertEqual(ItemRegistry.eligibleHiddenApplications(in: refreshed), ["system-item:0"])
         XCTAssertThrowsError(try LayoutEditor.move("system-position:module:FocusModes", to: .hidden, at: 1, in: hidden))
+        XCTAssertThrowsError(try LayoutEditor.move("system-position:module:Clock", to: .hidden, at: 1, in: hidden))
+        XCTAssertThrowsError(try LayoutEditor.move("system-position:module:Clock", to: .visible, at: 0, in: hidden))
+    }
+
+    func testPinnedSystemItemsStayOutOfEditableRowsAndRecoverOldLayouts() throws {
+        let clock = DiscoveredItem(bundleID: "com.apple.MenuBarAgent", identifier: nil,
+            name: "Clock", positionTableKey: "module:Clock")
+        let controlCenter = DiscoveredItem(bundleID: "com.apple.MenuBarAgent", identifier: nil,
+            name: "Control Center", presentationID: "control-center", isPinnedSystemItem: true)
+        let snapshot = try ItemRegistry.reconcile([clock, controlCenter], with: LayoutDocument())
+        XCTAssertTrue(snapshot.items.allSatisfy(\.isPinnedSystemItem))
+        XCTAssertTrue(snapshot.items.allSatisfy { !$0.canReorder && !$0.canSetVisibility })
+        XCTAssertEqual(snapshot.layout.entries.map(\.id), ["system-position:module:Clock"])
+
+        let old = LayoutDocument(entries: [LayoutEntry(id: "system-position:module:Clock",
+            bundleID: "com.apple.MenuBarAgent", name: "Clock", group: .hidden)])
+        let recovered = try ItemRegistry.recoveringUnsupportedVisibility(in: old)
+        XCTAssertEqual(recovered.entries[0].group, .visible)
     }
 
     func testSingleIconOwnersRequireTheirExactPositionIdentity() throws {

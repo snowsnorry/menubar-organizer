@@ -11,14 +11,16 @@ public struct DiscoveredItem: Equatable, Sendable {
     /// Exact key in the macOS menu-bar position table, only for a verified
     /// one-to-one system status item. Never inferred from its display name.
     public var positionTableKey: String?
+    public var isPinnedSystemItem: Bool
 
     public init(bundleID: String?, identifier: String?, name: String,
                 isDirectlyAccessible: Bool = true, isSupported: Bool = true, presentationID: String? = nil,
-                positionTableKey: String? = nil) {
+                positionTableKey: String? = nil, isPinnedSystemItem: Bool = false) {
         self.bundleID = bundleID; self.identifier = identifier; self.name = name
         self.isDirectlyAccessible = isDirectlyAccessible; self.isSupported = isSupported
         self.presentationID = presentationID
         self.positionTableKey = positionTableKey
+        self.isPinnedSystemItem = isPinnedSystemItem
     }
 }
 
@@ -30,12 +32,17 @@ public struct RegistryItem: Identifiable, Equatable, Sendable {
     public var entry: LayoutEntry
     public var availability: ItemAvailability
     public var linkedIconCount: Int
+    public var isPinnedByDiscovery: Bool = false
     /// Number of observed visible layout rows preceding this read-only row.
     public var presentationSlot: Int? = nil
     public var id: String { entry.id }
     public var displayName: String { entry.bundleID == ItemRegistry.organizerBundleID ? "Menubar Organizer" : entry.name }
-    public var canReorder: Bool { availability == .available && linkedIconCount == 1 }
+    public var isPinnedSystemItem: Bool {
+        ItemRegistry.isPinnedSystemPosition(entry) || isPinnedByDiscovery
+    }
+    public var canReorder: Bool { !isPinnedSystemItem && availability == .available && linkedIconCount == 1 }
     public var canSetVisibility: Bool {
+        if isPinnedSystemItem { return false }
         if entry.bundleID == ItemRegistry.organizerBundleID { return false }
         if entry.bundleID.hasPrefix("com.apple.") {
             return ItemRegistry.systemVisibilityTarget(for: entry) != nil &&
@@ -56,17 +63,22 @@ public enum ItemRegistry {
     public static let organizerBundleID = "local.menubarorganizer.app"
     public static let timeMachinePositionID = "system-position:status:com.apple.systemuiserver::com.apple.menuextra.TimeMachine"
 
+    public static func isPinnedSystemPosition(_ entry: LayoutEntry) -> Bool {
+        guard entry.bundleID == "com.apple.controlcenter" || entry.bundleID == "com.apple.MenuBarAgent" else { return false }
+        return entry.id == "system-position:module:Clock" || entry.id == "system-position:module:BentoBox-0"
+    }
+
     private static let moduleVisibilityTargets: [String: String] = [
         "module:Battery": "system-item:0", "module:Bluetooth": "system-item:1",
-        "module:Clock": "system-item:2", "module:Displays": "system-item:3",
+        "module:Displays": "system-item:3",
         "module:KeyboardBrightness": "system-item:4", "module:Sound": "system-item:5",
-        "module:WiFi": "system-item:6", "module:ScreenMirroring": "system-item:7",
-        "module:BentoBox-0": "system-item:8"
+        "module:WiFi": "system-item:6", "module:ScreenMirroring": "system-item:7"
     ]
 
     /// Return only targets whose discovery identity uniquely names a supported
     /// system icon. The owner bundle is checked as well as the position key.
     public static func systemVisibilityTarget(for entry: LayoutEntry) -> String? {
+        if isPinnedSystemPosition(entry) { return nil }
         if entry.bundleID == "com.apple.systemuiserver", entry.id == timeMachinePositionID {
             return "com.apple.systemuiserver"
         }
@@ -86,14 +98,16 @@ public enum ItemRegistry {
     /// Legacy or unknown SystemUIServer rows cannot safely select the process-wide filter.
     public static func recoveringUnsupportedVisibility(in saved: LayoutDocument) throws -> LayoutDocument {
         var result = try saved.validated()
+        func mustRemainVisible(_ entry: LayoutEntry) -> Bool {
+            entry.bundleID == organizerBundleID || isPinnedSystemPosition(entry) ||
+                (entry.bundleID == "com.apple.systemuiserver" && entry.id != timeMachinePositionID)
+        }
         guard result.entries.contains(where: {
-            $0.group == .hidden && ($0.bundleID == organizerBundleID ||
-                ($0.bundleID == "com.apple.systemuiserver" && $0.id != timeMachinePositionID))
+            $0.group == .hidden && mustRemainVisible($0)
         }) else {
             return result
         }
-        for index in result.entries.indices where result.entries[index].bundleID == organizerBundleID ||
-            (result.entries[index].bundleID == "com.apple.systemuiserver" && result.entries[index].id != timeMachinePositionID) {
+        for index in result.entries.indices where mustRemainVisible(result.entries[index]) {
             result.entries[index].group = .visible
         }
         result.entries = result.entries(in: .visible) + result.entries(in: .hidden)
@@ -194,6 +208,7 @@ public enum ItemRegistry {
                 availability = .available
             }
             return RegistryItem(entry: entry, availability: availability, linkedIconCount: members.count,
+                                isPinnedByDiscovery: first.isPinnedSystemItem,
                                 presentationSlot: slots[entry.id])
         }
         return RegistrySnapshot(layout: try layout.validated(), items: mergingDraft(items, with: layout), unknownOwnerCount: unknownOwners)
@@ -289,6 +304,7 @@ public enum LayoutEditor {
     public static func move(_ id: String, to group: ItemGroup, at index: Int, in document: LayoutDocument) throws -> LayoutDocument {
         var document = try document.validated()
         guard let selected = document.entries.first(where: { $0.id == id }) else { throw LayoutEditError.itemNotFound }
+        if ItemRegistry.isPinnedSystemPosition(selected) { throw LayoutEditError.protectedApplication }
         if selected.bundleID == ItemRegistry.organizerBundleID && group == .hidden {
             throw LayoutEditError.protectedApplication
         }

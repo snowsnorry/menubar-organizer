@@ -191,7 +191,10 @@ enum NativeDiscovery {
                     name: name, isDirectlyAccessible: false,
                     isSupported: positionKey != nil || (bundle.map { !$0.hasPrefix("com.apple.") } ?? false),
                     presentationID: isSystem ? "\(target.pid):\(childIndex)" : nil,
-                    positionTableKey: positionKey),
+                    positionTableKey: positionKey,
+                    isPinnedSystemItem: (bundle == "com.apple.controlcenter" || bundle == "com.apple.MenuBarAgent") &&
+                        (positionKey == "module:Clock" || positionKey == "module:BentoBox-0" ||
+                         SystemMenuItemKind.isControlCenterStatusItem(metadata: metadata))),
                     pid: target.pid, frame: rectangle, launchDate: target.launchDate, displays: displays))
             }
         }

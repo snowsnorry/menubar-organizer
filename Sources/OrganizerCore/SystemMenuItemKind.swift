@@ -46,6 +46,17 @@ public enum SystemMenuItemKind: String, CaseIterable, Sendable {
         return Set(metadata.compactMap { modules[$0] })
     }
 
+    /// The Control Center host also owns unrelated status items, so its bundle
+    /// identifier alone is not evidence that a child is the pinned control.
+    public static func isControlCenterStatusItem(metadata: [String]) -> Bool {
+        let identifiers: Set<String> = [
+            "BentoBox", "BentoBox-0", "PrimaryBento", "com.apple.controlcenter.BentoBox",
+            "com.apple.controlcenter.PrimaryBento",
+            "com.apple.menuextra.controlcenter", "Control Center", "Пункт управления"
+        ]
+        return metadata.contains { identifiers.contains($0) }
+    }
+
     public static func identify(bundleID: String, metadata: [String]) -> Self? {
         guard bundleID.hasPrefix("com.apple.") else { return nil }
         switch bundleID {

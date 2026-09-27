@@ -5,7 +5,7 @@ import OrganizerCore
 struct SettingsView: View {
     @Bindable var model: SettingsModel
 
-    private var selected: RegistryItem? { model.items.first { $0.id == model.selectedID } }
+    private var selected: RegistryItem? { model.items.first { $0.id == model.selectedID && !$0.isPinnedSystemItem } }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -215,7 +215,7 @@ struct SettingsView: View {
     }
 
     private func items(in group: ItemGroup) -> [RegistryItem] {
-        model.items.filter { $0.entry.group == group }
+        model.items.filter { $0.entry.group == group && !$0.isPinnedSystemItem }
     }
 
     private func canReorder(_ item: RegistryItem) -> Bool {

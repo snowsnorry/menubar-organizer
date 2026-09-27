@@ -195,7 +195,9 @@ final class SettingsModel {
             try store.save(snapshot.layout)
             draft.updateCommitted(snapshot.layout, preservingChanges: editing)
             items = try ItemRegistry.reconcile(observations, with: document).items
-            if selectedID == nil { selectedID = items.first?.id }
+            if selectedID == nil || items.contains(where: { $0.id == selectedID && $0.isPinnedSystemItem }) {
+                selectedID = items.first(where: { !$0.isPinnedSystemItem })?.id
+            }
             statusMessage = lastExplicitApplyFailure ?? (hasUnsavedChanges ? L10n.text("status.unsaved")
                 : requiresManualRetry ? L10n.text("status.manualRetry") : nil)
         } catch {
@@ -244,8 +246,9 @@ final class SettingsModel {
 
     private func savedOrderDiffers(from observations: [DiscoveredItem], snapshot: RegistrySnapshot) -> Bool {
         let present = Set(observations.compactMap(ItemRegistry.observationID))
+        let movable = Set(snapshot.items.filter(\.canReorder).map(\.id))
         for group in ItemGroup.allCases {
-            let desired = snapshot.layout.entries(in: group).map(\.id).filter { present.contains($0) }
+            let desired = snapshot.layout.entries(in: group).map(\.id).filter { present.contains($0) && movable.contains($0) }
             let members = Set(desired)
             let observed = observations.compactMap(ItemRegistry.observationID).filter { members.contains($0) }
             if observed != desired { return true }

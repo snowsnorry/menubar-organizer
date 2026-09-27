@@ -26,4 +26,10 @@ final class SystemMenuItemKindTests: XCTestCase {
         XCTAssertTrue(SystemMenuItemKind.modulePositionKeys(metadata: ["com.apple.controlcenter.WiFi.Other"]).isEmpty)
         XCTAssertEqual(SystemMenuItemKind.modulePositionKeys(metadata: ["com.apple.controlcenter.WiFi", "Battery"]), ["module:WiFi", "module:Battery"])
     }
+
+    func testPinnedControlCenterRequiresChildEvidence() {
+        XCTAssertTrue(SystemMenuItemKind.isControlCenterStatusItem(metadata: ["com.apple.controlcenter", "Пункт управления"]))
+        XCTAssertTrue(SystemMenuItemKind.isControlCenterStatusItem(metadata: ["com.apple.controlcenter.BentoBox"]))
+        XCTAssertFalse(SystemMenuItemKind.isControlCenterStatusItem(metadata: ["com.apple.controlcenter", "Wi-Fi"]))
+    }
 }
