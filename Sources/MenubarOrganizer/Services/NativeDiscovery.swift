@@ -41,8 +41,6 @@ enum NativeDiscovery {
         guard AXIsProcessTrusted() else { throw NativeDiscoveryError.permissionDenied }
         let targets: [Target] = await MainActor.run {
             NSWorkspace.shared.runningApplications.compactMap { app in
-                guard app.processIdentifier != ProcessInfo.processInfo.processIdentifier,
-                      !(app.bundleIdentifier?.hasPrefix("local.menubarorganizer.") ?? false) else { return nil }
                 return Target(pid: app.processIdentifier, bundleID: app.bundleIdentifier,
                               name: app.localizedName ?? app.bundleIdentifier ?? "", launchDate: app.launchDate)
             }.sorted { $0.pid < $1.pid }
@@ -78,9 +76,7 @@ enum NativeDiscovery {
         let otherTargets: [Target] = await MainActor.run {
             guard validateMembership else { return [] }
             return NSWorkspace.shared.runningApplications.compactMap { app in
-                guard owners[app.processIdentifier] == nil,
-                      app.processIdentifier != ProcessInfo.processInfo.processIdentifier,
-                      !(app.bundleIdentifier?.hasPrefix("local.menubarorganizer.") ?? false) else { return nil }
+                guard owners[app.processIdentifier] == nil else { return nil }
                 return Target(pid: app.processIdentifier, bundleID: app.bundleIdentifier,
                               name: app.localizedName ?? "", launchDate: app.launchDate)
             }

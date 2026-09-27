@@ -18,9 +18,8 @@ final class NativeBackend: LayoutBackend {
     private var hiddenFingerprint: [String] = []
 
     private var fingerprint: [String] {
-        NSWorkspace.shared.runningApplications.filter {
-            !($0.bundleIdentifier?.hasPrefix("local.menubarorganizer.") ?? false)
-        }.map { "\($0.processIdentifier):\($0.launchDate?.timeIntervalSince1970 ?? 0)" }.sorted()
+        NSWorkspace.shared.runningApplications
+            .map { "\($0.processIdentifier):\($0.launchDate?.timeIntervalSince1970 ?? 0)" }.sorted()
     }
 
     private func remember(_ inventory: [NativeItem]) {

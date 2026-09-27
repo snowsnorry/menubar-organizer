@@ -79,9 +79,12 @@ final class SettingsModel {
     func start() async {
         guard !loaded, !stopped else { return }
         if isPreview {
-            let candidates = [("com.openai.codex", "ChatGPT"), ("ru.keepcoder.Telegram", "Telegram"),
+            let candidates = [(ItemRegistry.organizerBundleID, "Menubar Organizer"),
+                              ("com.openai.codex", "ChatGPT"), ("ru.keepcoder.Telegram", "Telegram"),
                               ("com.google.Chrome", "Google Chrome"), ("com.1password.1password", "1Password"), ("com.apple.Safari", "Safari")]
-            let installed = candidates.filter { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0.0) != nil }
+            let installed = candidates.filter {
+                $0.0 == ItemRegistry.organizerBundleID || NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0.0) != nil
+            }
             let samples = Array(installed.prefix(5))
             let observations = samples.map { DiscoveredItem(bundleID: $0.0, identifier: nil, name: $0.1) }
             document = LayoutDocument(entries: samples.enumerated().map { index, app in
@@ -120,6 +123,9 @@ final class SettingsModel {
     }
 
     func icon(for item: RegistryItem) -> NSImage? {
+        if item.entry.bundleID == ItemRegistry.organizerBundleID {
+            return NSImage(systemSymbolName: "ellipsis", accessibilityDescription: nil)
+        }
         if item.entry.bundleID.hasPrefix("com.apple.") {
             let symbol = SystemMenuItemKind.identify(bundleID: item.entry.bundleID, metadata: [item.entry.name])?.symbol ?? "menubar.rectangle"
             return NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
@@ -145,7 +151,7 @@ final class SettingsModel {
     }
 
     func refresh(adoptObserved: Bool = true, restoreSaved: Bool = false,
-                 restoreSavedOrder: Bool = false) async {
+                 restoreSavedOrder: Bool = false, retryPendingRestore: Bool = false) async {
         guard !stopped, !isPreview else { return }
         if restoreSavedOrder { pendingLaunchOrderRestore = true }
         // Record lifecycle/start intent before the busy/permission guards. The
@@ -173,6 +179,8 @@ final class SettingsModel {
             guard !stopped, token == revision else { return }
             var snapshot = try ItemRegistry.reconcile(observations, with: draft.committed)
             if pendingLaunchOrderRestore {
+                snapshot.layout = try ItemRegistry.adoptingObservedOrganizerPosition(observations, in: snapshot.layout)
+                snapshot.items = ItemRegistry.mergingDraft(snapshot.items, with: snapshot.layout)
                 savedOrderNeedsRestore = savedOrderDiffers(from: observations, snapshot: snapshot)
             }
             // Passive refresh adopts only directly verified, unambiguous order.
@@ -205,7 +213,7 @@ final class SettingsModel {
         guard token == revision, !stopped else { return }
         if case .suspended = reveal.state { await run(reveal.resume(now: now)) }
         guard token == revision, !stopped else { return }
-        if pendingRestore {
+        if pendingRestore && (!requiresManualRetry || retryPendingRestore) {
             // No await separates releasing this discovery operation from taking
             // the apply busy state; a queued lifecycle refresh drains afterward.
             isBusy = false
@@ -675,9 +683,8 @@ final class SettingsModel {
                     try? await backend.setHiddenApplications([])
                 }
                 // The coordinator already discovered the post-move state.
-                // Re-running visibility immediately would briefly reveal the
-                // icons that were just hidden successfully.
-                if !report.visibilityApplied { refreshAfterBusy = true }
+                // Keep the pending layout for an explicit retry without
+                // scheduling the same failed operation again.
             } else if !allowReordering, report.status == .partial,
                       report.error == nil || report.error == "nonintrusiveReorderingUnavailable",
                       let lastExplicitApplyFailure {

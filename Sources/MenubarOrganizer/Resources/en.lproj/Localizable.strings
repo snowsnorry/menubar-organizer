@@ -92,6 +92,7 @@
 "inspector.system" = "System menu item";
 "inspector.systemReadOnly" = "Shown in its menu bar position. Moving and hiding this system item are not supported yet.";
 "inspector.systemReorderable" = "Drag to change its position. This system item cannot be hidden.";
+"inspector.organizer" = "Drag to change the Organizer's position. Its control icon always stays visible.";
 "inspector.systemEditable" = "Drag to change its position, or move it to Hidden. System hiding may also affect Focus.";
 "inspector.systemHideable" = "Move this system item to Hidden. System hiding may also affect Focus.";
 "status.systemVisibilityNotVerified" = "macOS did not hide the selected system icon. The visibility filter was removed; the saved choice can be retried.";

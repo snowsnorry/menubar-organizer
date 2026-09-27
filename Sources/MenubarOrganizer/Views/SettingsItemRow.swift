@@ -10,9 +10,9 @@ struct SettingsItemRow: View {
     var body: some View {
         content
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(item.entry.name)
+        .accessibilityLabel(item.displayName)
         .accessibilityValue(L10n.text("availability.\(item.availability.rawValue)"))
-        .accessibilityHint(L10n.text(item.entry.bundleID.hasPrefix("com.apple.")
+        .accessibilityHint(L10n.text(item.entry.bundleID == ItemRegistry.organizerBundleID ? "inspector.organizer" : item.entry.bundleID.hasPrefix("com.apple.")
             ? (item.canSetVisibility
                ? (item.canReorder ? "inspector.systemEditable" : "inspector.systemHideable")
                : item.canReorder ? "inspector.systemReorderable" : "inspector.systemReadOnly") : "row.hint"))
@@ -27,7 +27,7 @@ struct SettingsItemRow: View {
                 .opacity(item.canReorder || item.canSetVisibility ? 1 : 0)
                 .accessibilityHidden(true)
             ApplicationIcon(image: icon, size: 24)
-            Text(item.entry.name)
+            Text(item.displayName)
                 .font(.system(size: 14))
                 .lineLimit(1)
                 .truncationMode(.middle)
@@ -37,7 +37,7 @@ struct SettingsItemRow: View {
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())
-        .help(item.entry.name)
+        .help(item.displayName)
     }
 }
 

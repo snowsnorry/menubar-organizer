@@ -52,7 +52,7 @@ struct SettingsView: View {
                     .accessibilityLabel(L10n.text("status.applying"))
             }
             Button {
-                Task { await model.refresh() }
+                Task { await model.refresh(retryPendingRestore: true) }
             } label: {
                 Image(systemName: "arrow.clockwise")
             }

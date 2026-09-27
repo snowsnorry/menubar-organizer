@@ -16,6 +16,39 @@ final class ItemRegistryTests: XCTestCase {
         XCTAssertEqual(ItemRegistry.eligibleHiddenApplications(in: returned), ["org.app"])
     }
 
+    func testOrganizerCanBeReorderedButCannotBeHidden() throws {
+        let organizer = item(ItemRegistry.organizerBundleID)
+        let snapshot = try ItemRegistry.reconcile([item("org.other"), organizer], with: LayoutDocument())
+        let own = try XCTUnwrap(snapshot.items.first { $0.entry.bundleID == ItemRegistry.organizerBundleID })
+        XCTAssertTrue(own.canReorder)
+        XCTAssertFalse(own.canSetVisibility)
+        let reordered = try LayoutEditor.move(own.id, to: .visible, at: 0, in: snapshot.layout)
+        XCTAssertEqual(reordered.entries.first?.id, own.id)
+        XCTAssertThrowsError(try LayoutEditor.move(own.id, to: .hidden, at: 0, in: reordered))
+
+        let old = LayoutDocument(entries: [LayoutEntry(id: own.id, bundleID: ItemRegistry.organizerBundleID,
+            name: "Menubar Organizer", group: .hidden)])
+        let recovered = try ItemRegistry.reconcile([organizer], with: old)
+        XCTAssertEqual(recovered.layout.entries.first?.group, .visible)
+        XCTAssertTrue(ItemRegistry.eligibleHiddenApplications(in: recovered).isEmpty)
+    }
+
+    func testOrganizerUsesObservedPositionWhenDiscoveredAndOnNextLaunch() throws {
+        let own = item(ItemRegistry.organizerBundleID)
+        let observations = [item("org.first"), own, item("org.last")]
+        let discovered = try ItemRegistry.reconcile(observations, with: LayoutDocument())
+        XCTAssertEqual(discovered.layout.entries.map(\.bundleID),
+                       ["org.first", ItemRegistry.organizerBundleID, "org.last"])
+
+        let savedAtEnd = try LayoutEditor.move(discovered.items[1].id, to: .visible, at: 2,
+                                               in: discovered.layout)
+        let restored = try ItemRegistry.adoptingObservedOrganizerPosition(observations, in: savedAtEnd)
+        XCTAssertEqual(restored.entries.map(\.bundleID),
+                       ["org.first", ItemRegistry.organizerBundleID, "org.last"])
+        XCTAssertEqual(try ReorderPlanner.plan(from: observations.compactMap(ItemRegistry.observationID),
+                                               to: restored.entries.map(\.id)), [])
+    }
+
     func testFallbackCollapsesLinkedIconsButDuplicateExplicitIDsAreAmbiguous() throws {
         let linked = try ItemRegistry.reconcile([item(), item("org.app", "")], with: LayoutDocument())
         XCTAssertEqual(linked.items.count, 1)

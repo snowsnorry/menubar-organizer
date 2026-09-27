@@ -33,8 +33,10 @@ public struct RegistryItem: Identifiable, Equatable, Sendable {
     /// Number of observed visible layout rows preceding this read-only row.
     public var presentationSlot: Int? = nil
     public var id: String { entry.id }
+    public var displayName: String { entry.bundleID == ItemRegistry.organizerBundleID ? "Menubar Organizer" : entry.name }
     public var canReorder: Bool { availability == .available && linkedIconCount == 1 }
     public var canSetVisibility: Bool {
+        if entry.bundleID == ItemRegistry.organizerBundleID { return false }
         if entry.bundleID.hasPrefix("com.apple.") {
             return ItemRegistry.systemVisibilityTarget(for: entry) != nil &&
                 (availability == .available || availability == .overflow ||
@@ -51,6 +53,7 @@ public struct RegistrySnapshot: Equatable, Sendable {
 }
 
 public enum ItemRegistry {
+    public static let organizerBundleID = "local.menubarorganizer.app"
     public static let timeMachinePositionID = "system-position:status:com.apple.systemuiserver::com.apple.menuextra.TimeMachine"
 
     private static let moduleVisibilityTargets: [String: String] = [
@@ -79,17 +82,18 @@ public enum ItemRegistry {
         return singleIconOwners[entry.bundleID] == entry.id ? entry.bundleID : nil
     }
 
-    /// Keep the specifically identified Time Machine entry. Legacy or unknown
-    /// SystemUIServer rows cannot safely select the process-wide filter.
+    /// Keep protected rows visible when loading layouts from older versions.
+    /// Legacy or unknown SystemUIServer rows cannot safely select the process-wide filter.
     public static func recoveringUnsupportedVisibility(in saved: LayoutDocument) throws -> LayoutDocument {
         var result = try saved.validated()
         guard result.entries.contains(where: {
-            $0.bundleID == "com.apple.systemuiserver" && $0.id != timeMachinePositionID && $0.group == .hidden
+            $0.group == .hidden && ($0.bundleID == organizerBundleID ||
+                ($0.bundleID == "com.apple.systemuiserver" && $0.id != timeMachinePositionID))
         }) else {
             return result
         }
-        for index in result.entries.indices where result.entries[index].bundleID == "com.apple.systemuiserver" &&
-            result.entries[index].id != timeMachinePositionID {
+        for index in result.entries.indices where result.entries[index].bundleID == organizerBundleID ||
+            (result.entries[index].bundleID == "com.apple.systemuiserver" && result.entries[index].id != timeMachinePositionID) {
             result.entries[index].group = .visible
         }
         result.entries = result.entries(in: .visible) + result.entries(in: .hidden)
@@ -115,7 +119,7 @@ public enum ItemRegistry {
     /// Missing records remain in the requested layout. A snapshot never issues
     /// backend operations and never equates an absent icon with an empty bar.
     public static func reconcile(_ observations: [DiscoveredItem], with saved: LayoutDocument) throws -> RegistrySnapshot {
-        var layout = try saved.validated()
+        var layout = try recoveringUnsupportedVisibility(in: saved)
         var buckets: [String: [DiscoveredItem]] = [:]
         var observedOrder: [String] = []
         var unknownOwners = 0
@@ -135,10 +139,11 @@ public enum ItemRegistry {
                   (!bundle.hasPrefix("com.apple.") || id.hasPrefix("system-position:")),
                   (!id.hasPrefix("system-position:") || buckets[id]?.count == 1),
                   buckets[id]?.allSatisfy(\.isSupported) == true else { continue }
-            let group = bundle.hasPrefix("com.apple.") && id.hasPrefix("system-position:") ? ItemGroup.visible : groups[bundle] ?? .visible
+            let group = (bundle.hasPrefix("com.apple.") && id.hasPrefix("system-position:")) || bundle == organizerBundleID
+                ? ItemGroup.visible : groups[bundle] ?? .visible
             let entry = LayoutEntry(id: id, bundleID: bundle, name: observation.name, group: group)
-            if id.hasPrefix("system-position:") {
-                // New system items join at their observed position, including
+            if id.hasPrefix("system-position:") || bundle == organizerBundleID {
+                // New system items and the Organizer join at their observed position, including
                 // between two already-saved third-party entries.
                 let preceding = observedOrder.prefix { $0 != id }.reversed()
                     .compactMap { observedID in layout.entries.firstIndex(where: { $0.id == observedID && $0.group == .visible }) }.first
@@ -194,6 +199,26 @@ public enum ItemRegistry {
         return RegistrySnapshot(layout: try layout.validated(), items: mergingDraft(items, with: layout), unknownOwnerCount: unknownOwners)
     }
 
+    /// The Organizer's NSStatusItem restores its own autosaved position at launch.
+    /// Accept that position before replaying the saved order of other icons.
+    public static func adoptingObservedOrganizerPosition(_ observations: [DiscoveredItem],
+                                                         in saved: LayoutDocument) throws -> LayoutDocument {
+        let saved = try saved.validated()
+        guard let own = saved.entries.first(where: { $0.bundleID == organizerBundleID && $0.group == .visible }),
+              let ownID = observations.compactMap(observationID).first(where: { $0 == own.id }) else { return saved }
+        let visibleIDs = Set(saved.entries(in: .visible).map(\.id))
+        let observed = observations.compactMap(observationID).filter { visibleIDs.contains($0) }
+        guard observed.filter({ $0 == ownID }).count == 1,
+              let observedIndex = observed.firstIndex(of: ownID) else { return saved }
+        let withoutOwn = saved.entries(in: .visible).filter { $0.id != ownID }
+        let before = observed.dropFirst(observedIndex + 1).first { $0 != ownID }
+        let after = observed.prefix(observedIndex).last { $0 != ownID }
+        let insertion = before.flatMap { neighbor in withoutOwn.firstIndex(where: { $0.id == neighbor }) }
+            ?? after.flatMap { neighbor in withoutOwn.firstIndex(where: { $0.id == neighbor }).map { $0 + 1 } }
+        guard let insertion else { return saved }
+        return try LayoutEditor.move(ownID, to: .visible, at: insertion, in: saved)
+    }
+
     /// Draft edits retain their requested order. Read-only rows keep ordinal
     /// positions from the latest discovery, rather than becoming editable anchors.
     /// Hidden/absent rows consume no visible slot; extra slots clamp to the end.
@@ -246,6 +271,7 @@ public enum ItemRegistry {
         }
         let groups = Dictionary(grouping: snapshot.items.filter { !$0.entry.bundleID.hasPrefix("com.apple.") }, by: { $0.entry.bundleID })
         let applications: [String] = groups.compactMap { bundle, items -> String? in
+            guard bundle != organizerBundleID else { return nil }
             let present = items.filter { $0.availability != .absent }
             guard !present.isEmpty, present.allSatisfy({ $0.canSetVisibility && $0.entry.group == .hidden }) else { return nil }
             return bundle
@@ -264,6 +290,9 @@ public enum LayoutEditor {
     public static func move(_ id: String, to group: ItemGroup, at index: Int, in document: LayoutDocument) throws -> LayoutDocument {
         var document = try document.validated()
         guard let selected = document.entries.first(where: { $0.id == id }) else { throw LayoutEditError.itemNotFound }
+        if selected.bundleID == ItemRegistry.organizerBundleID && group == .hidden {
+            throw LayoutEditError.protectedApplication
+        }
         if selected.bundleID.hasPrefix("com.apple.") &&
             (!selected.id.hasPrefix("system-position:") ||
              (selected.group != group && ItemRegistry.systemVisibilityTarget(for: selected) == nil)) {

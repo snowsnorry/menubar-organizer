@@ -18,7 +18,7 @@ struct SettingsInspector: View {
                 HStack(spacing: 16) {
                     ApplicationIcon(image: icon, size: 62)
                     VStack(alignment: .leading, spacing: 5) {
-                        Text(item.entry.name)
+                        Text(item.displayName)
                             .font(.system(size: 19, weight: .semibold))
                             .fixedSize(horizontal: false, vertical: true)
                         Text(L10n.text(item.entry.bundleID.hasPrefix("com.apple.") ? "inspector.system" : "inspector.application"))
@@ -45,7 +45,8 @@ struct SettingsInspector: View {
                         orderButton("chevron.down", label: "action.moveLater", enabled: canMoveLater, action: moveLater)
                     }
                 }
-                Text(L10n.text(item.id == ItemRegistry.timeMachinePositionID ? "inspector.timeMachine" : item.entry.bundleID.hasPrefix("com.apple.")
+                Text(L10n.text(item.entry.bundleID == ItemRegistry.organizerBundleID ? "inspector.organizer" :
+                    item.id == ItemRegistry.timeMachinePositionID ? "inspector.timeMachine" : item.entry.bundleID.hasPrefix("com.apple.")
                     ? (item.canSetVisibility
                        ? (item.canReorder ? "inspector.systemEditable" : "inspector.systemHideable")
                        : item.canReorder ? "inspector.systemReorderable" : "inspector.systemReadOnly")
@@ -65,7 +66,7 @@ struct SettingsInspector: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                if !item.entry.bundleID.hasPrefix("com.apple.") {
+                if !item.entry.bundleID.hasPrefix("com.apple.") && item.entry.bundleID != ItemRegistry.organizerBundleID {
                     Text(L10n.text("inspector.visibilityScope"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
