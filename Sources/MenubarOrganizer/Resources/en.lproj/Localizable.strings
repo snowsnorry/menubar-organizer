@@ -49,13 +49,8 @@
 "menu.hideHidden" = "Hide items";
 "menu.title" = "Menubar Organizer";
 "status.preview" = "Interface preview — system actions disabled";
-"privacy.unknownTitle" = "Enable hiding for this session?";
-"privacy.unknownMessage" = "macOS applies a global visibility filter. %d running processes have no bundle ID; their menu bar icons cannot be protected and may also disappear. System menus may be affected. This permission expires when Organizer quits.";
-"privacy.enableSession" = "Enable for This Session";
 "action.cancel" = "Cancel";
-"status.unknownOwners" = "Hiding is unavailable: %d processes have no bundle ID. Move an application to Hidden to review and allow the session-only exception.";
 "status.unsupportedOS" = "Menu bar control is supported only on the verified macOS build 26A428.";
-"status.policyBusy" = "Reveal hidden items before changing this permission.";
 
 "menu.toggleHidden" = "Show or Hide Menu Bar Items";
 
@@ -96,7 +91,6 @@
 "inspector.systemEditable" = "Drag to change its position, or move it to Hidden. System hiding may also affect Focus.";
 "inspector.systemHideable" = "Move this system item to Hidden. System hiding may also affect Focus.";
 "status.systemVisibilityNotVerified" = "macOS did not hide the selected system icon. The visibility filter was removed; the saved choice can be retried.";
-"status.unidentifiedMenuBarOwners" = "Hiding was not applied because a menu bar icon has no identifiable owner. No visibility filter remains active.";
 "status.manualRetry" = "The previous attempt did not apply. Press OK to retry your saved visibility choices.";
 "inspector.timeMachine" = "Drag to change its position, or move it to Hidden. This filters SystemUIServer as a whole; other system icons may be affected. Focus disappeared in the last live test.";
 "positionAccess.title" = "Allow menu bar rearrangement";

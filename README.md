@@ -34,7 +34,7 @@ At launch, the app restores the saved order before hiding saved hidden items. If
 
 Clicking the `…` status item or pressing Command-Shift-H reveals hidden items; clicking it again hides them. The default inactivity interval is five seconds. Moving the pointer in the menu bar restarts the interval, while an open menu pauses it. Some menus do not send reliable accessibility notifications, so dismissal with Escape can leave items visible until the next click outside the menu bar.
 
-The private visibility interface is limited to the tested OS build. Some system items have only partial support: the Focus icon may disappear while a visibility filter is active, and Time Machine filtering affects its host process as a whole. Reordering is deferred when an item is overflowing, its coordinates cannot be verified, or a protected item blocks the path. Processes without a bundle ID require separate consent for the current session.
+The private visibility interface is limited to the tested OS build. Some system items have only partial support: the Focus icon may disappear while a visibility filter is active, and Time Machine filtering affects its host process as a whole. Reordering is deferred when an item is overflowing, its coordinates cannot be verified, or a protected item blocks the path. A global visibility filter may also affect menu bar icons whose processes have no bundle ID.
 
 End-to-end system acceptance is still in progress. In particular, direct status-item clicking, login behavior, two-display changes, and recovery from every interruption need further manual verification. A successful build or unit test does not establish those behaviors.
 

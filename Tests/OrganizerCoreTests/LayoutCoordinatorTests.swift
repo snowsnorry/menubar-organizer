@@ -351,28 +351,27 @@ final class LayoutCoordinatorTests: XCTestCase {
         XCTAssertEqual(requests, [["com.apple.systemuiserver", "org.grammarly"]])
     }
 
-    func testUnknownOwnerAfterVisibilityImmediatelyRevealsAndReportsPartial() async {
+    func testUnknownOwnerAfterVisibilityKeepsRequestedItemsHidden() async {
         let a = item("a")
         let backend = FakeLayoutBackend([a])
         await backend.addOnDiscovery(2, items: [DiscoveredItem(bundleID: nil, identifier: nil, name: "unknown")])
         let report = await LayoutCoordinator(backend: backend).apply(document([a], hidden: ["a"]))
-        XCTAssertEqual(report.status, .partial)
+        XCTAssertEqual(report.status, .applied)
         XCTAssertEqual(report.snapshot?.unknownOwnerCount, 1)
         let requests = await backend.visibilityRequests()
-        XCTAssertEqual(requests, [["org.a"], []])
+        XCTAssertEqual(requests, [["org.a"]])
     }
 
-    func testUnknownOwnerBeforeVisibilityIsNotReportedAsApplied() async {
+    func testUnknownOwnerBeforeVisibilityAllowsHiding() async {
         let a = item("a")
         let unknown = DiscoveredItem(bundleID: nil, identifier: nil, name: "unknown")
         let backend = FakeLayoutBackend([a, unknown])
         let report = await LayoutCoordinator(backend: backend)
             .apply(document([a], hidden: ["a"]), allowReordering: false)
-        XCTAssertEqual(report.status, .partial)
-        XCTAssertEqual(report.error, "unidentifiedMenuBarOwners")
-        XCTAssertFalse(report.visibilityApplied)
+        XCTAssertEqual(report.status, .applied)
+        XCTAssertTrue(report.visibilityApplied)
         let requests = await backend.visibilityRequests()
-        XCTAssertTrue(requests.isEmpty)
+        XCTAssertEqual(requests, [["org.a"]])
     }
 
     func testAmbiguousSiblingAfterMoveImmediatelyRevealsAndStops() async {

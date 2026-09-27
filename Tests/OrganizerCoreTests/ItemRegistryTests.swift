@@ -112,10 +112,10 @@ final class ItemRegistryTests: XCTestCase {
         XCTAssertEqual(result.layout.entries.map(\.group), [.hidden, .hidden])
     }
 
-    func testUnknownOwnerPreventsGlobalHidingAndConflictingSavedOwnerCannotHideAnotherApp() throws {
+    func testUnknownOwnerDoesNotBlockHidingAndConflictingSavedOwnerCannotHideAnotherApp() throws {
         let saved = LayoutDocument(entries: [.init(id: "app:org.app", bundleID: "org.app", name: "App", group: .hidden)])
         let unknown = try ItemRegistry.reconcile([item(), .init(bundleID: nil, identifier: nil, name: "Unknown")], with: saved)
-        XCTAssertTrue(ItemRegistry.eligibleHiddenApplications(in: unknown).isEmpty)
+        XCTAssertEqual(ItemRegistry.eligibleHiddenApplications(in: unknown), ["org.app"])
         let conflicting = LayoutDocument(entries: [.init(id: "app:org.app", bundleID: "org.other", name: "Other", group: .hidden)])
         let result = try ItemRegistry.reconcile([item()], with: conflicting)
         XCTAssertEqual(result.items[0].availability, .unsupported)

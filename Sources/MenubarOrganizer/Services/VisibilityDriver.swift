@@ -8,17 +8,9 @@ import OSLog
 /// icon or system interaction has been independently verified.
 @MainActor
 final class VisibilityDriver {
-    enum UnknownOwnerPolicy: Sendable {
-        case requireIdentifiedOwners
-        /// The model must obtain explicit product-level consent before selecting
-        /// this policy. Permission granted outside the product is insufficient.
-        case allowUnidentifiedOwners
-    }
-
     enum DriverError: Error, LocalizedError, Sendable {
         case unsupportedBuild
         case runtimeUnavailable
-        case unidentifiedOwners(count: Int)
         case competingManager
         case invalidTarget(String)
         case targetNotRunning(String)
@@ -27,13 +19,11 @@ final class VisibilityDriver {
         case activationTimedOut
         case superseded
         case inventoryChanged
-        case policyChangeWhileActive
 
         var errorDescription: String? {
             switch self {
             case .unsupportedBuild: "Visibility control is supported only on the tested macOS build 26A428."
             case .runtimeUnavailable: "The menu bar service is unavailable or its interface has changed."
-            case .unidentifiedOwners(let count): "\(count) running processes have no bundle identifier; hiding is unavailable until an explicit unknown-owner policy is chosen."
             case .competingManager: "Another menu bar manager is running."
             case .invalidTarget(let bundle): "This application cannot be hidden: \(bundle)."
             case .targetNotRunning(let bundle): "This application is not running: \(bundle)."
@@ -42,7 +32,6 @@ final class VisibilityDriver {
             case .activationTimedOut: "The menu bar service did not respond in time."
             case .superseded: "A newer visibility request replaced this request."
             case .inventoryChanged: "The running applications changed; hidden items were requested to be revealed."
-            case .policyChangeWhileActive: "Reveal hidden items before changing the unknown-owner policy."
             }
         }
     }
@@ -51,7 +40,6 @@ final class VisibilityDriver {
     /// Called when an active or pending request is invalidated by an error or
     /// application inventory change. The model must clear its hidden-state UI.
     var onInvalidated: (@MainActor (DriverError) -> Void)?
-    private(set) var unknownOwnerPolicy: UnknownOwnerPolicy
 
     private var runtime: Runtime?
     private var session: Session?
@@ -61,8 +49,7 @@ final class VisibilityDriver {
     private var observers: [NSObjectProtocol] = []
     private var sessionBundles: Set<String> = []
 
-    init(unknownOwnerPolicy: UnknownOwnerPolicy = .requireIdentifiedOwners) {
-        self.unknownOwnerPolicy = unknownOwnerPolicy
+    init() {
         let observer = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main
         ) { [weak self] notification in
@@ -83,13 +70,6 @@ final class VisibilityDriver {
     isolated deinit {
         invalidate(reason: nil)
         for observer in observers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
-    }
-
-    /// Session-only setting: the caller must first present the product consent
-    /// explanation. It is intentionally neither inferred nor persisted here.
-    func allowUnidentifiedOwnersForSession() throws {
-        guard !isActive, session == nil, pending == nil else { throw DriverError.policyChangeWhileActive }
-        unknownOwnerPolicy = .allowUnidentifiedOwners
     }
 
     func setHiddenApplications(_ targets: Set<String>) async throws {
@@ -128,12 +108,6 @@ final class VisibilityDriver {
             $0.bundleIdentifier != ownBundle &&
             Self.isCompetingManager(($0.bundleIdentifier ?? "") + " " + ($0.localizedName ?? ""))
         }) else { throw DriverError.competingManager }
-        let unidentified = applications.filter {
-            $0.bundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
-        }
-        if !unidentified.isEmpty, unknownOwnerPolicy == .requireIdentifiedOwners {
-            throw DriverError.unidentifiedOwners(count: unidentified.count)
-        }
         let knownBundles = Set(applications.compactMap(\.bundleIdentifier).filter {
             !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         })

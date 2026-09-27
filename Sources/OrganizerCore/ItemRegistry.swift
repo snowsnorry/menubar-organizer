@@ -263,7 +263,6 @@ public enum ItemRegistry {
     /// Third-party hiding is application-wide. Supported system items contribute
     /// individual targets; ambiguous or unsupported observations never hide.
     public static func eligibleHiddenApplications(in snapshot: RegistrySnapshot) -> Set<String> {
-        guard snapshot.unknownOwnerCount == 0 else { return [] }
         let systemTargets = snapshot.items.compactMap { item -> String? in
             guard item.entry.group == .hidden, item.canSetVisibility,
                   item.availability == .available || item.availability == .overflow else { return nil }

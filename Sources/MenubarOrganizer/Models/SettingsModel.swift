@@ -38,7 +38,6 @@ final class SettingsModel {
     @ObservationIgnored private var visibilityRevision: UInt64 = 0
     @ObservationIgnored private var awaitingReveal = false
     @ObservationIgnored private var operationTail: Task<Void, Never>?
-    @ObservationIgnored private var consentPresented = false
     @ObservationIgnored private var confirming = false
     @ObservationIgnored private var lifecycleSuspended = false
     @ObservationIgnored private var pendingRestore = false
@@ -353,11 +352,6 @@ final class SettingsModel {
             statusMessage = L10n.text("status.accessibilityRequired")
             return false
         }
-        if needsLayout, document.entries.contains(where: { $0.group == .hidden }),
-           backend.visibility.unknownOwnerPolicy == .requireIdentifiedOwners,
-           unidentifiedOwnerCount > 0 {
-            guard requestSessionVisibilityConsent(), !lifecycleSuspended, !stopped else { return false }
-        }
         confirming = true
         // A group-only change can still require a native move after hidden
         // applications are revealed. Preflight before saving the new layout.
@@ -661,8 +655,6 @@ final class SettingsModel {
             case .partial:
                 statusMessage = report.error == "systemVisibilityNotVerified"
                     ? L10n.text("status.systemVisibilityNotVerified")
-                    : report.error == "unidentifiedMenuBarOwners"
-                    ? L10n.text("status.unidentifiedMenuBarOwners")
                     : report.error == "nonintrusiveReorderingUnavailable"
                     ? L10n.text("status.orderSavedNotApplied")
                     : report.error == "obstructed"
@@ -723,7 +715,7 @@ final class SettingsModel {
     }
 
     func interaction(pointerInside: Bool, menuOpen: Bool) async {
-        guard !stopped, !isPreview, !consentPresented else { return }
+        guard !stopped, !isPreview else { return }
         if accessibilityGranted, !AXIsProcessTrusted() {
             accessibilityGranted = false
             await suspend(reason: .permissionsUnavailable)
@@ -799,17 +791,10 @@ final class SettingsModel {
         }
     }
 
-    private var unidentifiedOwnerCount: Int {
-        NSWorkspace.shared.runningApplications.filter {
-            !$0.isTerminated && $0.bundleIdentifier?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false
-        }.count
-    }
-
     private func backendErrorMessage(_ error: any Error) -> String {
         if let driverError = error as? VisibilityDriver.DriverError {
             switch driverError {
             case .unsupportedBuild: return L10n.text("status.unsupportedOS")
-            case .unidentifiedOwners(let count): return L10n.format("status.unknownOwners", count)
             default: return L10n.text("status.backendUnavailable")
             }
         }
@@ -819,82 +804,32 @@ final class SettingsModel {
         return L10n.text("status.failed")
     }
 
-    // The coordinator currently erases error types. Interpret only complete known
-    // representations; unrelated order failures must not infer a hiding problem
-    // from the current process inventory or visibility policy.
-    private func unknownOwnerCount(in error: String?) -> Int? {
-        let prefix = "unidentifiedOwners(count: "
-        guard let error, error.hasPrefix(prefix), error.hasSuffix(")") else { return nil }
-        let digits = error.dropFirst(prefix.count).dropLast()
-        guard !digits.isEmpty, digits.allSatisfy({ $0 >= "0" && $0 <= "9" }),
-              let count = Int(digits) else { return nil }
-        return count
-    }
-
     private func layoutErrorMessage(_ error: String?) -> String {
-        if error == "unidentifiedMenuBarOwners" { return L10n.text("status.unidentifiedMenuBarOwners") }
         if error == "nonintrusiveReorderingUnavailable" { return L10n.text("status.orderSavedNotApplied") }
         if error == "reorderVerificationFailed" || error == "expired" {
             return L10n.text("status.reorderNotApplied")
         }
         if error == "obstructed" { return L10n.text("status.reorderObstructed") }
         if error == "unsupportedBuild" { return L10n.text("status.unsupportedOS") }
-        if let count = unknownOwnerCount(in: error) { return L10n.format("status.unknownOwners", count) }
         return L10n.text("status.failed")
     }
 
     private func layoutErrorCode(_ error: String?) -> String {
-        if unknownOwnerCount(in: error) != nil { return "unidentifiedOwners" }
         // Never emit raw error text: associated values may include application
         // identifiers, names, paths, or messages from another process.
         let permitted: Set<String> = [
             "unsupportedBuild", "runtimeUnavailable", "competingManager",
             "allocationFailed", "activationTimedOut", "superseded", "inventoryChanged",
-            "policyChangeWhileActive", "permissionDenied", "timeBudgetExceeded",
+            "permissionDenied", "timeBudgetExceeded",
             "inventoryLimitExceeded", "staleGeometry", "ambiguousIdentity",
             "unsupported", "unavailable", "inputBusy", "obstructed", "expired", "nonintrusiveReorderingUnavailable",
             "reorderVerificationFailed", "accessRequired", "wrongFile", "unreadable",
             "unmatched", "ambiguous", "stale", "noSpace", "writeFailed", "noReflow",
             "incompatibleIdentities",
-            "unidentifiedMenuBarOwners",
             "CancellationError()"
         ]
         guard let error, permitted.contains(error) else { return "unclassified" }
         return error
-    }
-
-    private func requestSessionVisibilityConsent() -> Bool {
-        guard !isPreview, !stopped else { return false }
-        let token = revision
-        isBusy = true
-        consentPresented = true
-        timer?.cancel(); timer = nil
-        visibilityRevision &+= 1
-        defer {
-            consentPresented = false
-            finishBusy(token: token)
-            if !stopped {
-                Task { [weak self] in
-                    guard let self, !self.stopped else { return }
-                    await self.run(self.reveal.noteActivity(now: self.now))
-                }
-            }
-        }
-        let alert = NSAlert()
-        alert.alertStyle = .warning
-        alert.messageText = L10n.text("privacy.unknownTitle")
-        alert.informativeText = L10n.format("privacy.unknownMessage", unidentifiedOwnerCount)
-        // Cancel is the default Return/Escape action; enable requires an explicit choice.
-        alert.addButton(withTitle: L10n.text("action.cancel")).keyEquivalent = "\r"
-        alert.addButton(withTitle: L10n.text("privacy.enableSession")).keyEquivalent = ""
-        guard alert.runModal() == .alertSecondButtonReturn, !stopped, token == revision else { return false }
-        do {
-            try backend.visibility.allowUnidentifiedOwnersForSession()
-            return true
-        } catch {
-            statusMessage = L10n.text("status.policyBusy")
-            return false
-        }
     }
 
     private func serialize(_ operation: @escaping @MainActor () async -> Void) async {

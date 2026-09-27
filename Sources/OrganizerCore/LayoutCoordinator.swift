@@ -118,7 +118,7 @@ public actor LayoutCoordinator {
                 $0.availability != .absent && !$0.canSetVisibility
             }.map { item in ItemRegistry.systemVisibilityTarget(for: item.entry) ?? item.entry.bundleID })
             // Absence after hiding is expected and does not prove ineligibility.
-            let safe: Set<String> = result.snapshot.unknownOwnerCount > 0 ? [] : result.hidden.subtracting(unsafe)
+            let safe = result.hidden.subtracting(unsafe)
             guard safe != result.hidden else { return result }
             try await backend.setHiddenApplications(safe)
             guard token == generation else { return nil }
@@ -153,11 +153,6 @@ public actor LayoutCoordinator {
                 let beforeSnapshot = try ItemRegistry.reconcile(before, with: document)
                 report.snapshot = beforeSnapshot
                 report.observedOrder = observedIDs(before)
-                if beforeSnapshot.unknownOwnerCount > 0 {
-                    report.status = .partial
-                    report.error = "unidentifiedMenuBarOwners"
-                    return report
-                }
                 hidden = ItemRegistry.eligibleHiddenApplications(in: beforeSnapshot)
             }
             try await backend.setHiddenApplications(hidden)
