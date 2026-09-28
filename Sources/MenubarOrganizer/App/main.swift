@@ -11,12 +11,14 @@ final class OrganizerAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegat
     private var monitor: Any?
     private var localMonitor: Any?
     private var notifications: [NSObjectProtocol] = []
+    private var screenLockNotifications: [NSObjectProtocol] = []
     private let menuObserver = MenuInteractionObserver()
     private var observingMenus = false
     private var observedExternalMenuOpen = false
     private var menuInteraction = false
     private var lastPointerInMenuBar: NSPoint?
     private var ownMenuOpen = false
+    private var lifecycleInactive = false
     private var terminating = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -168,7 +170,7 @@ final class OrganizerAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegat
     }
 
     private func updateInteraction() async {
-        guard model != nil, !terminating else { return }
+        guard model != nil, !terminating, !lifecycleInactive else { return }
         let pointer = NSEvent.mouseLocation
         let pointerInside = pointerInMenuBar()
         let movedInside = pointerInside && lastPointerInMenuBar != nil && lastPointerInMenuBar != pointer
@@ -186,14 +188,29 @@ final class OrganizerAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegat
 
     private func installLifecycle() {
         let workspace = NSWorkspace.shared.notificationCenter
-        for name in [NSWorkspace.willSleepNotification, NSWorkspace.sessionDidResignActiveNotification] {
+        for name in [NSWorkspace.willSleepNotification, NSWorkspace.screensDidSleepNotification,
+                     NSWorkspace.sessionDidResignActiveNotification] {
             notifications.append(workspace.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                Task { @MainActor in await self?.model.suspend(reason: .lifecycle) }
+                Task { @MainActor in await self?.suspendForLifecycle() }
             })
         }
-        for name in [NSWorkspace.didWakeNotification, NSWorkspace.sessionDidBecomeActiveNotification] {
+        for name in [NSWorkspace.didWakeNotification, NSWorkspace.screensDidWakeNotification,
+                     NSWorkspace.sessionDidBecomeActiveNotification] {
             notifications.append(workspace.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                Task { @MainActor in await self?.model.resumeLifecycle() }
+                Task { @MainActor in await self?.resumeFromLifecycle() }
+            })
+        }
+        // AppKit has no dedicated unlock notification. This distributed system
+        // event supplements wake and session activation for lock without sleep.
+        let distributed = DistributedNotificationCenter.default()
+        for name in ["com.apple.screenIsLocked", "com.apple.screenIsUnlocked"] {
+            screenLockNotifications.append(distributed.addObserver(
+                forName: Notification.Name(name), object: nil, queue: .main
+            ) { [weak self] _ in
+                Task { @MainActor in
+                    if name == "com.apple.screenIsLocked" { await self?.suspendForLifecycle() }
+                    else { await self?.resumeFromLifecycle(forceRestore: true) }
+                }
             })
         }
         notifications.append(workspace.addObserver(forName: NSWorkspace.didLaunchApplicationNotification,
@@ -218,11 +235,37 @@ final class OrganizerAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegat
         })
     }
 
+    private func resetMenuTracking() {
+        if observingMenus { menuObserver.stop(); observingMenus = false }
+        observedExternalMenuOpen = false
+        menuInteraction = false
+        lastPointerInMenuBar = nil
+    }
+
+    private func suspendForLifecycle() async {
+        guard !terminating else { return }
+        lifecycleInactive = true
+        resetMenuTracking()
+        ownMenuOpen = false
+        await model.suspend(reason: .lifecycle)
+    }
+
+    private func resumeFromLifecycle(forceRestore: Bool = false) async {
+        guard !terminating else { return }
+        lifecycleInactive = false
+        resetMenuTracking()
+        await updateInteraction()
+        await model.resumeLifecycle(forceRestore: forceRestore)
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard !terminating else { return .terminateLater }
         terminating = true
         pulse?.invalidate()
         menuObserver.stop()
+        for notification in screenLockNotifications {
+            DistributedNotificationCenter.default().removeObserver(notification)
+        }
         if let monitor { NSEvent.removeMonitor(monitor) }
         if let localMonitor { NSEvent.removeMonitor(localMonitor) }
         Task { await model.stop(); sender.reply(toApplicationShouldTerminate: true) }

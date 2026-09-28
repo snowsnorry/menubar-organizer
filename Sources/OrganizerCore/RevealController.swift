@@ -80,6 +80,19 @@ public struct RevealController: Sendable {
         }
     }
 
+    /// An explicit click can repair a released visibility assertion even when
+    /// the desired policy still says collapsed. Keep an open menu uninterrupted.
+    public mutating func requestHide() -> [Effect] {
+        if isMenuOpen {
+            state = .revealed
+            pendingCollapse = true
+            return cancelTimer()
+        }
+        state = .collapsed
+        pendingCollapse = false
+        return cancelTimer() + [.hideHidden]
+    }
+
     public mutating func noteActivity(now: Double) -> [Effect] {
         guard state == .revealed else { return [] }
         return restartTimer(now: now)
@@ -133,7 +146,13 @@ public struct RevealController: Sendable {
     /// Call only after permissions/backend/lifecycle are usable again.
     /// Preserve interaction flags; an open menu still prevents a timer.
     public mutating func resume(now: Double) -> [Effect] {
-        guard case .suspended = state else { return [] }
+        guard case .suspended(let reason) = state else { return [] }
+        // A lifecycle refresh always reapplies the saved layout. Restore its
+        // collapsed policy immediately unless a menu is still being used.
+        if reason == .lifecycle, !isMenuOpen {
+            state = .collapsed
+            return []
+        }
         state = .revealed
         return [.showHidden] + restartTimer(now: now)
     }

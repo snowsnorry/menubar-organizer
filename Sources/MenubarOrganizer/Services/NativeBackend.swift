@@ -16,6 +16,8 @@ final class NativeBackend: LayoutBackend {
     private var cacheForeground: pid_t?
     private var hiddenApplications: Set<String> = []
     private var hiddenFingerprint: [String] = []
+    private var recentlyRevealedApplications: Set<String>?
+    private var recentlyRevealedFingerprint: [String] = []
 
     private var fingerprint: [String] {
         NSWorkspace.shared.runningApplications
@@ -90,6 +92,14 @@ final class NativeBackend: LayoutBackend {
 
     func hasActiveVisibilityRestriction() async -> Bool { visibility.isActive }
 
+    /// The exact targets of the assertion we just released are safe to reuse
+    /// for a manual collapse while the running-process inventory is unchanged.
+    func recentlyRevealedTargets() -> Set<String>? {
+        guard let recentlyRevealedApplications,
+              recentlyRevealedFingerprint == fingerprint else { return nil }
+        return recentlyRevealedApplications
+    }
+
     func setHiddenApplications(_ bundleIDs: Set<String>) async throws {
         try await serialize {
             guard !self.stopped || bundleIDs.isEmpty else { throw CancellationError() }
@@ -98,6 +108,8 @@ final class NativeBackend: LayoutBackend {
             if !bundleIDs.isEmpty, self.hiddenApplications == bundleIDs,
                self.visibility.isActive, self.hiddenFingerprint == fingerprint { return }
             let wasActive = self.visibility.isActive
+            let previousHidden = self.hiddenApplications
+            let previousFingerprint = self.hiddenFingerprint
             do {
                 try await self.visibility.setHiddenApplications(bundleIDs)
                 // Reapplying even the same nonempty set replaces an assertion.
@@ -106,8 +118,17 @@ final class NativeBackend: LayoutBackend {
                 }
                 self.hiddenApplications = bundleIDs
                 self.hiddenFingerprint = self.fingerprint
+                if bundleIDs.isEmpty, wasActive, !previousHidden.isEmpty,
+                   previousFingerprint == fingerprint, self.hiddenFingerprint == fingerprint {
+                    self.recentlyRevealedApplications = previousHidden
+                    self.recentlyRevealedFingerprint = self.hiddenFingerprint
+                } else {
+                    self.recentlyRevealedApplications = nil
+                    self.recentlyRevealedFingerprint = []
+                }
             } catch {
                 self.invalidateInventory(); self.hiddenApplications = []; self.hiddenFingerprint = []
+                self.recentlyRevealedApplications = nil; self.recentlyRevealedFingerprint = []
                 throw error
             }
         }

@@ -85,7 +85,7 @@ final class RevealControllerTests: XCTestCase {
     }
 
     func testSuspensionCancelsAndResumeFailsOpenWithFreshInterval() {
-        for reason in [RevealController.SuspensionReason.lifecycle, .backendUnavailable, .permissionsUnavailable] {
+        for reason in [RevealController.SuspensionReason.backendUnavailable, .permissionsUnavailable] {
             var controller = RevealController()
             _ = controller.toggle(now: 0)
             XCTAssertEqual(controller.suspend(reason: reason), [.cancelTimer, .showHidden])
@@ -98,6 +98,37 @@ final class RevealControllerTests: XCTestCase {
             XCTAssertEqual(controller.timerFired(token: 1, now: 104), [])
             XCTAssertEqual(controller.resume(now: 104), [])
         }
+    }
+
+    func testLifecycleResumeRestoresCollapsedPolicyWithoutARevealDelay() {
+        var controller = RevealController()
+        _ = controller.toggle(now: 0)
+        controller.confirmVisibility(.visible)
+        XCTAssertEqual(controller.suspend(reason: .lifecycle), [.cancelTimer, .showHidden])
+        XCTAssertEqual(controller.resume(now: 100), [])
+        XCTAssertEqual(controller.state, .collapsed)
+        XCTAssertNil(controller.deadline)
+        XCTAssertEqual(controller.observedVisibility, .visible)
+        XCTAssertEqual(controller.timerFired(token: 1, now: 105), [])
+    }
+
+    func testExplicitHideRepairsReleasedAssertionWithoutStartingDelay() {
+        var controller = RevealController()
+        controller.confirmVisibility(.visible)
+        XCTAssertEqual(controller.requestHide(), [.hideHidden])
+        XCTAssertEqual(controller.state, .collapsed)
+        XCTAssertNil(controller.deadline)
+        XCTAssertEqual(controller.observedVisibility, .visible)
+    }
+
+    func testExplicitHideWaitsForOpenMenuThenHidesImmediately() {
+        var controller = RevealController()
+        _ = controller.setMenuOpen(true, now: 0)
+        XCTAssertEqual(controller.requestHide(), [])
+        XCTAssertTrue(controller.pendingCollapse)
+        XCTAssertEqual(controller.setMenuOpen(false, now: 5), [.hideHidden])
+        XCTAssertEqual(controller.state, .collapsed)
+        XCTAssertNil(controller.deadline)
     }
 
     func testSuspensionPreservesOpenMenuAndObservedVisibility() {

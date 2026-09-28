@@ -40,6 +40,9 @@ final class SettingsModel {
     @ObservationIgnored private var operationTail: Task<Void, Never>?
     @ObservationIgnored private var confirming = false
     @ObservationIgnored private var lifecycleSuspended = false
+    @ObservationIgnored private var lifecycleRecoveryInProgress = false
+    @ObservationIgnored private var pendingLifecycleRestore = false
+    @ObservationIgnored private var lastAppliedHiddenLayout: LayoutDocument?
     @ObservationIgnored private var pendingRestore = false
     @ObservationIgnored private var pendingLaunchOrderRestore = false
     @ObservationIgnored private var requiresManualRetry = UserDefaults.standard.bool(forKey: manualRetryKey)
@@ -212,6 +215,10 @@ final class SettingsModel {
             return
         }
         guard token == revision, !stopped else { return }
+        if pendingLifecycleRestore, reveal.isMenuOpen {
+            finishBusy(token: token)
+            return
+        }
         if case .suspended = reveal.state { await run(reveal.resume(now: now)) }
         guard token == revision, !stopped else { return }
         if pendingRestore && (!requiresManualRetry || retryPendingRestore) {
@@ -646,6 +653,9 @@ final class SettingsModel {
             switch report.status {
             case .applied:
                 applied = true
+                if report.visibilityApplied, backend.visibility.isActive {
+                    lastAppliedHiddenLayout = requested
+                }
                 if explicit, report.visibilityApplied,
                    requested.entries.contains(where: { $0.group == .hidden }) {
                     await run(reveal.confirmExplicitHide())
@@ -714,6 +724,13 @@ final class SettingsModel {
 
     func toggle() async {
         guard loaded, !stopped, !isBusy, !isPreview else { return }
+        // The visibility assertion can be released over sleep while the policy
+        // still says collapsed. In that case the control means "hide now".
+        if reveal.state != .revealed, !backend.visibility.isActive,
+           draft.committed.entries.contains(where: { $0.group == .hidden }) {
+            await run(reveal.requestHide())
+            return
+        }
         await run(reveal.toggle(now: now))
     }
 
@@ -725,9 +742,13 @@ final class SettingsModel {
             statusMessage = L10n.text("status.accessibilityRequired")
             return
         }
+        let menuWasOpen = reveal.isMenuOpen
         let effects = reveal.setMenuOpen(menuOpen, now: now)
             + reveal.setPointerInInteractionRegion(pointerInside, now: now)
         await run(effects)
+        if menuWasOpen, !menuOpen, pendingLifecycleRestore, !lifecycleSuspended {
+            await resumeLifecycle(forceRestore: true)
+        }
     }
 
     func noteMenuBarActivity() async {
@@ -735,14 +756,24 @@ final class SettingsModel {
         await run(reveal.noteActivity(now: now))
     }
 
-    func resumeLifecycle() async {
+    func resumeLifecycle(forceRestore: Bool = false) async {
         guard !stopped, !isPreview else { return }
+        guard lifecycleSuspended || forceRestore ||
+            (draft.committed.entries.contains(where: { $0.group == .hidden }) && !backend.visibility.isActive)
+        else { return }
+        pendingLifecycleRestore = true
         lifecycleSuspended = false
+        if reveal.isMenuOpen { pendingRestore = true; return }
+        guard !lifecycleRecoveryInProgress else { return }
+        lifecycleRecoveryInProgress = true
+        defer { lifecycleRecoveryInProgress = false }
         await refresh(adoptObserved: false, restoreSaved: true)
+        if !pendingRestore { pendingLifecycleRestore = false }
     }
 
     func suspend(reason: RevealController.SuspensionReason) async {
         guard !stopped, !isPreview else { return }
+        if reason == .lifecycle, lifecycleSuspended { return }
         if reason == .lifecycle { lifecycleSuspended = true; refreshAfterBusy = false }
         revision &+= 1
         let token = revision
@@ -885,6 +916,10 @@ final class SettingsModel {
                 }
                 let hidden: Set<String>
                 if effect == .showHidden { hidden = [] }
+                else if lastAppliedHiddenLayout == draft.committed,
+                        let reusable = backend.recentlyRevealedTargets() {
+                    hidden = reusable
+                }
                 else {
                     let snapshot = try ItemRegistry.reconcile(try await backend.discover(), with: draft.committed)
                     guard token == visibilityRevision, !stopped, reveal.state == .collapsed else { return }
@@ -894,6 +929,9 @@ final class SettingsModel {
                 Logger(subsystem: "local.menubarorganizer.app", category: "visibility").notice("Applied visibility: hidden applications=\(hidden.count), uptime=\(self.now)")
                 guard token == visibilityRevision, !stopped else { return }
                 reveal.confirmVisibility(hidden.isEmpty ? .visible : .hidden)
+                if effect == .hideHidden, !hidden.isEmpty {
+                    lastAppliedHiddenLayout = draft.committed
+                }
                 if effect == .showHidden {
                     awaitingReveal = false
                     // A queued reveal receives its full interval only after
