@@ -112,6 +112,24 @@ final class RevealControllerTests: XCTestCase {
         XCTAssertEqual(controller.timerFired(token: 1, now: 105), [])
     }
 
+    func testLifecycleRestoreOverridesInterveningBackendSuspension() {
+        var controller = RevealController()
+        _ = controller.toggle(now: 0)
+        _ = controller.suspend(reason: .lifecycle)
+        _ = controller.suspend(reason: .backendUnavailable)
+        XCTAssertEqual(controller.restoreCollapsedForSavedLayout(), [])
+        XCTAssertEqual(controller.state, .collapsed)
+        XCTAssertNil(controller.deadline)
+    }
+
+    func testLifecycleRestoreCancelsAnExistingRevealTimer() {
+        var controller = RevealController()
+        _ = controller.toggle(now: 0)
+        XCTAssertEqual(controller.restoreCollapsedForSavedLayout(), [.cancelTimer])
+        XCTAssertEqual(controller.state, .collapsed)
+        XCTAssertEqual(controller.timerFired(token: 1, now: 5), [])
+    }
+
     func testExplicitHideRepairsReleasedAssertionWithoutStartingDelay() {
         var controller = RevealController()
         controller.confirmVisibility(.visible)

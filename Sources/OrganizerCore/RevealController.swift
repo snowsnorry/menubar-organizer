@@ -157,6 +157,16 @@ public struct RevealController: Sendable {
         return [.showHidden] + restartTimer(now: now)
     }
 
+    /// A saved-layout refresh reapplies visibility itself. Restore the
+    /// collapsed policy regardless of an intervening backend suspension or
+    /// a stale revealed state left by an interrupted operation.
+    public mutating func restoreCollapsedForSavedLayout() -> [Effect] {
+        guard !isMenuOpen else { return [] }
+        state = .collapsed
+        pendingCollapse = false
+        return cancelTimer()
+    }
+
     private var isInteracting: Bool { isMenuOpen }
 
     private mutating func interactionChanged(now: Double) -> [Effect] {

@@ -41,7 +41,7 @@ final class SettingsModel {
     @ObservationIgnored private var confirming = false
     @ObservationIgnored private var lifecycleSuspended = false
     @ObservationIgnored private var lifecycleRecoveryInProgress = false
-    @ObservationIgnored private var pendingLifecycleRestore = false
+    @ObservationIgnored private var pendingAutomaticRestore = false
     @ObservationIgnored private var lastAppliedHiddenLayout: LayoutDocument?
     @ObservationIgnored private var pendingRestore = false
     @ObservationIgnored private var pendingLaunchOrderRestore = false
@@ -155,14 +155,17 @@ final class SettingsModel {
     func refresh(adoptObserved: Bool = true, restoreSaved: Bool = false,
                  restoreSavedOrder: Bool = false, retryPendingRestore: Bool = false) async {
         guard !stopped, !isPreview else { return }
+        let hadPendingRestore = pendingRestore
         if restoreSavedOrder { pendingLaunchOrderRestore = true }
         // Record lifecycle/start intent before the busy/permission guards. The
         // next successful manual refresh must not erase an unfulfilled layout.
         if restoreSaved {
             pendingRestore = true
+            pendingAutomaticRestore = true
             restoreRevision &+= 1
             if isBusy { refreshAfterBusy = true }
         }
+        let requestedRestoreRevision = restoreRevision
         guard !confirming else { refreshAfterBusy = true; return }
         guard loaded, !isBusy, !lifecycleSuspended else { return }
         let editing = hasUnsavedChanges
@@ -176,10 +179,12 @@ final class SettingsModel {
         revision &+= 1
         let token = revision
         var savedOrderNeedsRestore = false
+        var readOnlySnapshot: RegistrySnapshot?
         do {
             let observations = try await backend.discover()
             guard !stopped, token == revision else { return }
             var snapshot = try ItemRegistry.reconcile(observations, with: draft.committed)
+            readOnlySnapshot = snapshot
             if pendingLaunchOrderRestore {
                 snapshot.layout = try ItemRegistry.adoptingObservedOrganizerPosition(observations, in: snapshot.layout)
                 snapshot.items = ItemRegistry.mergingDraft(snapshot.items, with: snapshot.layout)
@@ -215,17 +220,36 @@ final class SettingsModel {
             return
         }
         guard token == revision, !stopped else { return }
-        if pendingLifecycleRestore, reveal.isMenuOpen {
+        if pendingAutomaticRestore, reveal.isMenuOpen {
             finishBusy(token: token)
             return
         }
-        if case .suspended = reveal.state { await run(reveal.resume(now: now)) }
+        if restoreSaved, !hadPendingRestore, !pendingLaunchOrderRestore,
+           !requiresManualRetry, requestedRestoreRevision == restoreRevision,
+           reveal.state == .collapsed, backend.hasCurrentHiddenAssertion(),
+           let lastAppliedHiddenLayout, let readOnlySnapshot,
+           VisibilityRefreshPolicy.canKeepCurrentAssertion(applied: lastAppliedHiddenLayout,
+                                                           current: draft.committed,
+                                                           snapshot: readOnlySnapshot) {
+            pendingRestore = false
+            pendingAutomaticRestore = false
+            finishBusy(token: token)
+            return
+        }
+        if pendingAutomaticRestore {
+            await run(reveal.restoreCollapsedForSavedLayout())
+        } else if case .suspended = reveal.state {
+            await run(reveal.resume(now: now))
+        }
         guard token == revision, !stopped else { return }
-        if pendingRestore && (!requiresManualRetry || retryPendingRestore) {
+        if pendingRestore && (!requiresManualRetry || retryPendingRestore || pendingAutomaticRestore) {
             // No await separates releasing this discovery operation from taking
             // the apply busy state; a queued lifecycle refresh drains afterward.
             isBusy = false
-            if pendingLaunchOrderRestore {
+            let visibilityOnlyRecovery = pendingAutomaticRestore && requiresManualRetry && !retryPendingRestore
+            if visibilityOnlyRecovery {
+                await applyLayout(preserveSavedOrder: true, preserveManualRetry: true)
+            } else if pendingLaunchOrderRestore {
                 var restored = false
                 if savedOrderNeedsRestore {
                     do {
@@ -248,6 +272,10 @@ final class SettingsModel {
             }
         } else {
             finishBusy(token: token)
+        }
+        if (backend.visibility.isActive && reveal.state == .collapsed) ||
+            !pendingRestore || requiresManualRetry {
+            pendingAutomaticRestore = false
         }
     }
 
@@ -598,7 +626,8 @@ final class SettingsModel {
     @discardableResult
     private func applyLayout(allowReordering: Bool = false, explicit: Bool = false,
                              restoreOrderBeforeHiding: Bool = false,
-                             preserveSavedOrder: Bool = false) async -> Bool {
+                             preserveSavedOrder: Bool = false,
+                             preserveManualRetry: Bool = false) async -> Bool {
         guard !stopped else { return false }
         var applied = false
         isBusy = true
@@ -661,10 +690,14 @@ final class SettingsModel {
                     await run(reveal.confirmExplicitHide())
                 }
                 lastExplicitApplyFailure = nil
-                if restoreToken == restoreRevision { pendingRestore = false }
-                requiresManualRetry = false
-                UserDefaults.standard.set(false, forKey: Self.manualRetryKey)
-                statusMessage = L10n.text("status.applied")
+                if !preserveManualRetry {
+                    if restoreToken == restoreRevision { pendingRestore = false }
+                    requiresManualRetry = false
+                    UserDefaults.standard.set(false, forKey: Self.manualRetryKey)
+                    statusMessage = L10n.text("status.applied")
+                } else {
+                    statusMessage = L10n.text("status.manualRetry")
+                }
             case .partial:
                 statusMessage = report.error == "systemVisibilityNotVerified"
                     ? L10n.text("status.systemVisibilityNotVerified")
@@ -746,8 +779,8 @@ final class SettingsModel {
         let effects = reveal.setMenuOpen(menuOpen, now: now)
             + reveal.setPointerInInteractionRegion(pointerInside, now: now)
         await run(effects)
-        if menuWasOpen, !menuOpen, pendingLifecycleRestore, !lifecycleSuspended {
-            await resumeLifecycle(forceRestore: true)
+        if menuWasOpen, !menuOpen, pendingAutomaticRestore, !lifecycleSuspended {
+            await resumeLifecycle()
         }
     }
 
@@ -756,19 +789,25 @@ final class SettingsModel {
         await run(reveal.noteActivity(now: now))
     }
 
-    func resumeLifecycle(forceRestore: Bool = false) async {
+    func resumeLifecycle() async {
         guard !stopped, !isPreview else { return }
-        guard lifecycleSuspended || forceRestore ||
-            (draft.committed.entries.contains(where: { $0.group == .hidden }) && !backend.visibility.isActive)
-        else { return }
-        pendingLifecycleRestore = true
+        // Wake, screen wake, and unlock may all describe one transition. Once
+        // the saved restriction is active, a second restore would release it
+        // for a full inventory scan and visibly flash the icons again.
+        guard !lifecycleRecoveryInProgress else { return }
+        let hasHiddenItems = draft.committed.entries.contains { $0.group == .hidden }
+        guard lifecycleSuspended || pendingAutomaticRestore ||
+            (hasHiddenItems && (!backend.visibility.isActive || reveal.state != .collapsed)) else { return }
+        pendingAutomaticRestore = true
         lifecycleSuspended = false
         if reveal.isMenuOpen { pendingRestore = true; return }
-        guard !lifecycleRecoveryInProgress else { return }
         lifecycleRecoveryInProgress = true
         defer { lifecycleRecoveryInProgress = false }
         await refresh(adoptObserved: false, restoreSaved: true)
-        if !pendingRestore { pendingLifecycleRestore = false }
+        if (backend.visibility.isActive && reveal.state == .collapsed) ||
+            !pendingRestore || requiresManualRetry {
+            pendingAutomaticRestore = false
+        }
     }
 
     func suspend(reason: RevealController.SuspensionReason) async {

@@ -92,6 +92,11 @@ final class NativeBackend: LayoutBackend {
 
     func hasActiveVisibilityRestriction() async -> Bool { visibility.isActive }
 
+    /// The current assertion still covers the same running processes.
+    func hasCurrentHiddenAssertion() -> Bool {
+        visibility.isActive && !hiddenApplications.isEmpty && hiddenFingerprint == fingerprint
+    }
+
     /// The exact targets of the assertion we just released are safe to reuse
     /// for a manual collapse while the running-process inventory is unchanged.
     func recentlyRevealedTargets() -> Set<String>? {
