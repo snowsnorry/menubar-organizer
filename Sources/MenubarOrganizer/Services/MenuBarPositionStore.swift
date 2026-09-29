@@ -87,6 +87,14 @@ final class MenuBarPositionStore {
         return values
     }
 
+    /// These read-only modules can remain configured while macOS omits their
+    /// AX items from the collapsed menu bar.
+    func configuredUnsupportedModules() throws -> Set<String> {
+        try ensureAccess(promptIfNeeded: false)
+        let keys = Set(try positions().keys)
+        return keys.intersection(UnsupportedModulePresence.keys)
+    }
+
     private func tableKey(for item: NativeItem, in positions: [String: NSNumber],
                           inventory: [NativeItem]) throws -> String {
         if let key = item.item.positionTableKey {

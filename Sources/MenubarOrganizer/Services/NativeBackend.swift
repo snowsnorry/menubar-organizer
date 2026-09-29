@@ -18,6 +18,7 @@ final class NativeBackend: LayoutBackend {
     private var hiddenFingerprint: [String] = []
     private var recentlyRevealedApplications: Set<String>?
     private var recentlyRevealedFingerprint: [String] = []
+    private var unsupportedModules = UnsupportedModulePresence()
 
     private var fingerprint: [String] {
         NSWorkspace.shared.runningApplications
@@ -87,7 +88,20 @@ final class NativeBackend: LayoutBackend {
 
     func discover() async throws -> [DiscoveredItem] {
         if let tail { _ = try? await tail.value }
-        return try await inventory(refresh: false).map(\.item)
+        var observed = try await inventory(refresh: false).map(\.item)
+        let missing = unsupportedModules.missingKeys(observed: observed,
+            configured: try? positionStore.configuredUnsupportedModules())
+        for key in missing {
+            let name = switch key {
+            case "module:AudioVideoModule": "system.audioVideoControls"
+            case "module:AirDrop": "system.airDrop"
+            default: "system.user"
+            }
+            observed.append(DiscoveredItem(bundleID: "com.apple.MenuBarAgent", identifier: nil,
+                name: L10n.text(name), isDirectlyAccessible: false,
+                isSupported: false, positionTableKey: key))
+        }
+        return observed
     }
 
     func hasActiveVisibilityRestriction() async -> Bool { visibility.isActive }

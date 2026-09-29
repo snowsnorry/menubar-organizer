@@ -417,6 +417,25 @@ final class LayoutCoordinatorTests: XCTestCase {
         XCTAssertEqual(requests, [["com.apple.systemuiserver", "org.grammarly"]])
     }
 
+    func testReadOnlySystemUIServerSiblingsDoNotCancelTimeMachineFilter() async throws {
+        let timeMachine = DiscoveredItem(bundleID: "com.apple.systemuiserver", identifier: nil,
+            name: "Time Machine", positionTableKey:
+                "status:com.apple.systemuiserver::com.apple.menuextra.TimeMachine")
+        let vpn = DiscoveredItem(bundleID: "com.apple.systemuiserver", identifier: nil,
+            name: "VPN", isSupported: false, presentationID: "vpn")
+        let siri = DiscoveredItem(bundleID: "com.apple.systemuiserver", identifier: nil,
+            name: "Siri", isSupported: false, presentationID: "siri",
+            isOmittedFromSettings: true)
+        let backend = FakeLayoutBackend([timeMachine, vpn, siri])
+        let initial = try ItemRegistry.reconcile([timeMachine, vpn, siri], with: LayoutDocument())
+        let hidden = try LayoutEditor.move(ItemRegistry.timeMachinePositionID,
+            to: .hidden, at: 0, in: initial.layout)
+        let report = await LayoutCoordinator(backend: backend).apply(hidden, allowReordering: false)
+        XCTAssertEqual(report.status, .applied)
+        let requests = await backend.visibilityRequests()
+        XCTAssertEqual(requests, [["com.apple.systemuiserver"]])
+    }
+
     func testUnknownOwnerAfterVisibilityKeepsRequestedItemsHidden() async {
         let a = item("a")
         let backend = FakeLayoutBackend([a])

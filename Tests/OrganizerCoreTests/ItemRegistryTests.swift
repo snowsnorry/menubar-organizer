@@ -304,4 +304,116 @@ final class ItemRegistryTests: XCTestCase {
         }
     }
 
+    func testVPNIsUnsupportedWithoutHidingSharedSystemUIServer() throws {
+        let vpn = DiscoveredItem(bundleID: "com.apple.systemuiserver", identifier: nil,
+            name: "VPN", positionTableKey: "status:com.apple.systemuiserver::com.apple.menuextra.vpn")
+        let timeMachine = DiscoveredItem(bundleID: "com.apple.systemuiserver", identifier: nil,
+            name: "Time Machine", positionTableKey:
+                "status:com.apple.systemuiserver::com.apple.menuextra.TimeMachine")
+        let snapshot = try ItemRegistry.reconcile([vpn, timeMachine], with: LayoutDocument())
+        XCTAssertTrue(snapshot.items[0].isUnsupportedInSettings)
+        XCTAssertFalse(snapshot.items[0].canReorder)
+        XCTAssertFalse(snapshot.items[0].canSetVisibility)
+        XCTAssertTrue(snapshot.items[1].canReorder)
+        XCTAssertTrue(snapshot.items[1].canSetVisibility)
+        let hidden = try LayoutEditor.move(ItemRegistry.timeMachinePositionID, to: .hidden, at: 0, in: snapshot.layout)
+        XCTAssertEqual(ItemRegistry.eligibleHiddenApplications(in:
+            try ItemRegistry.reconcile([vpn, timeMachine], with: hidden)), ["com.apple.systemuiserver"])
+    }
+
+    func testUnsupportedSectionKeepsSavedGroupsButLocksKnownAndUnknownIcons() throws {
+        let focus = DiscoveredItem(bundleID: "com.apple.MenuBarAgent", identifier: nil,
+            name: "Focus", positionTableKey: "module:FocusModes")
+        let airDrop = DiscoveredItem(bundleID: "com.apple.MenuBarAgent", identifier: nil,
+            name: "AirDrop", isSupported: false, presentationID: "airdrop")
+        let user = DiscoveredItem(bundleID: "com.apple.MenuBarAgent", identifier: nil,
+            name: "User", isSupported: false, presentationID: "user")
+        let vpn = DiscoveredItem(bundleID: "com.apple.systemuiserver", identifier: nil,
+            name: "VPN", positionTableKey: "status:com.apple.systemuiserver::com.apple.menuextra.vpn")
+        let unknown = DiscoveredItem(bundleID: "com.apple.unknown", identifier: nil,
+            name: "Unknown", isSupported: false, presentationID: "unknown")
+        let saved = LayoutDocument(entries: [
+            LayoutEntry(id: "system-position:module:FocusModes", bundleID: "com.apple.MenuBarAgent",
+                        name: "Focus", group: .visible),
+            LayoutEntry(id: "system-position:status:com.apple.systemuiserver::com.apple.menuextra.vpn",
+                        bundleID: "com.apple.systemuiserver", name: "VPN", group: .visible)
+        ])
+        let snapshot = try ItemRegistry.reconcile([focus, airDrop, user, vpn, unknown], with: saved)
+        XCTAssertEqual(snapshot.layout, saved)
+        XCTAssertEqual(Set(snapshot.items.filter(\.isUnsupportedInSettings).map(\.entry.name)),
+                       ["Focus", "AirDrop", "User", "VPN", "Unknown"])
+        XCTAssertTrue(snapshot.items.allSatisfy { !$0.canReorder && !$0.canSetVisibility })
+        XCTAssertEqual(snapshot.layout.entries.count, 2)
+    }
+
+    func testSavedUnsupportedFocusRemainsListedWhenTemporarilyAbsent() throws {
+        let hiddenFocus = LayoutEntry(id: "system-position:module:FocusModes",
+            bundleID: "com.apple.MenuBarAgent", name: "Focus", group: .hidden)
+        let snapshot = try ItemRegistry.reconcile([], with: LayoutDocument(entries: [hiddenFocus]))
+        XCTAssertEqual(snapshot.layout.entries[0].group, .visible)
+        XCTAssertEqual(snapshot.items[0].availability, .absent)
+        XCTAssertTrue(snapshot.items[0].isUnsupportedInSettings)
+        XCTAssertFalse(snapshot.items[0].canReorder)
+        XCTAssertFalse(snapshot.items[0].canSetVisibility)
+    }
+
+    func testObservedFocusMergesWithSavedUnsupportedRow() throws {
+        let saved = LayoutDocument(entries: [LayoutEntry(
+            id: "system-position:module:FocusModes", bundleID: "com.apple.MenuBarAgent", name: "Focus")])
+        let observed = DiscoveredItem(bundleID: "com.apple.MenuBarAgent", identifier: nil,
+            name: "Focus", presentationID: "123:1", positionTableKey: "module:FocusModes")
+        let snapshot = try ItemRegistry.reconcile([observed], with: saved)
+        XCTAssertEqual(snapshot.items.map(\.id), ["system-position:module:FocusModes"])
+        XCTAssertTrue(snapshot.items[0].isUnsupportedInSettings)
+        XCTAssertFalse(snapshot.items[0].canReorder)
+        XCTAssertFalse(snapshot.items[0].canSetVisibility)
+    }
+
+    func testReadOnlyModulesStayListedAcrossExpandedAndCollapsedSnapshots() throws {
+        let expanded = [
+            DiscoveredItem(bundleID: "com.apple.MenuBarAgent", identifier: nil,
+                name: "Audio and Video Controls", isSupported: false, presentationID: "123:1",
+                positionTableKey: "module:AudioVideoModule"),
+            DiscoveredItem(bundleID: "com.apple.MenuBarAgent", identifier: nil,
+                name: "AirDrop", isSupported: false, presentationID: "123:2",
+                positionTableKey: "module:AirDrop"),
+            DiscoveredItem(bundleID: "com.apple.MenuBarAgent", identifier: nil,
+                name: "User", isSupported: false, presentationID: "123:3",
+                positionTableKey: "module:UserSwitcher")
+        ]
+        let collapsed = [
+            DiscoveredItem(bundleID: "com.apple.MenuBarAgent", identifier: nil,
+                name: "Audio and Video Controls", isDirectlyAccessible: false, isSupported: false,
+                positionTableKey: "module:AudioVideoModule"),
+            DiscoveredItem(bundleID: "com.apple.MenuBarAgent", identifier: nil,
+                name: "AirDrop", isDirectlyAccessible: false, isSupported: false,
+                positionTableKey: "module:AirDrop"),
+            DiscoveredItem(bundleID: "com.apple.MenuBarAgent", identifier: nil,
+                name: "User", isDirectlyAccessible: false, isSupported: false,
+                positionTableKey: "module:UserSwitcher")
+        ]
+        let first = try ItemRegistry.reconcile(expanded, with: LayoutDocument())
+        let second = try ItemRegistry.reconcile(collapsed, with: first.layout)
+        XCTAssertTrue(first.layout.entries.isEmpty)
+        XCTAssertTrue(second.layout.entries.isEmpty)
+        XCTAssertEqual(first.items.map(\.id), second.items.map(\.id))
+        XCTAssertEqual(second.items.map(\.entry.name), ["Audio and Video Controls", "AirDrop", "User"])
+        XCTAssertTrue(second.items.allSatisfy { $0.isUnsupportedInSettings &&
+            !$0.canReorder && !$0.canSetVisibility })
+    }
+
+    func testUnsupportedSiriCanBeOmittedWithoutDroppingSystemInventory() throws {
+        let siri = DiscoveredItem(bundleID: "com.apple.MenuBarAgent", identifier: "siri",
+            name: "Siri", isSupported: false, presentationID: "siri", isOmittedFromSettings: true)
+        let snapshot = try ItemRegistry.reconcile([siri], with: LayoutDocument())
+        XCTAssertEqual(snapshot.items.count, 1)
+        XCTAssertTrue(snapshot.items[0].isOmittedFromSettings)
+        XCTAssertFalse(snapshot.items[0].canReorder)
+        XCTAssertFalse(snapshot.items[0].canSetVisibility)
+        let previous = LayoutDocument(entries: [LayoutEntry(
+            id: "system-position:status:com.apple.Siri::Item-0",
+            bundleID: "com.apple.Siri", name: "Siri")])
+        XCTAssertTrue(try ItemRegistry.recoveringUnsupportedVisibility(in: previous).entries.isEmpty)
+    }
+
 }

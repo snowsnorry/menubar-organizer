@@ -12,15 +12,18 @@ public struct DiscoveredItem: Equatable, Sendable {
     /// one-to-one system status item. Never inferred from its display name.
     public var positionTableKey: String?
     public var isPinnedSystemItem: Bool
+    public var isOmittedFromSettings: Bool
 
     public init(bundleID: String?, identifier: String?, name: String,
                 isDirectlyAccessible: Bool = true, isSupported: Bool = true, presentationID: String? = nil,
-                positionTableKey: String? = nil, isPinnedSystemItem: Bool = false) {
+                positionTableKey: String? = nil, isPinnedSystemItem: Bool = false,
+                isOmittedFromSettings: Bool = false) {
         self.bundleID = bundleID; self.identifier = identifier; self.name = name
         self.isDirectlyAccessible = isDirectlyAccessible; self.isSupported = isSupported
         self.presentationID = presentationID
         self.positionTableKey = positionTableKey
         self.isPinnedSystemItem = isPinnedSystemItem
+        self.isOmittedFromSettings = isOmittedFromSettings
     }
 }
 
@@ -33,6 +36,7 @@ public struct RegistryItem: Identifiable, Equatable, Sendable {
     public var availability: ItemAvailability
     public var linkedIconCount: Int
     public var isPinnedByDiscovery: Bool = false
+    public var isOmittedFromSettings: Bool = false
     /// Number of observed visible layout rows preceding this read-only row.
     public var presentationSlot: Int? = nil
     public var id: String { entry.id }
@@ -40,8 +44,16 @@ public struct RegistryItem: Identifiable, Equatable, Sendable {
     public var isPinnedSystemItem: Bool {
         ItemRegistry.isPinnedSystemPosition(entry) || isPinnedByDiscovery
     }
-    public var canReorder: Bool { !isPinnedSystemItem && availability == .available && linkedIconCount == 1 }
+    /// Unsupported is a display section, never a persisted visibility group.
+    public var isUnsupportedInSettings: Bool {
+        return availability == .unsupported || availability == .ambiguous ||
+            (entry.bundleID.hasPrefix("com.apple.") && ItemRegistry.unsupportedSystemPositionIDs.contains(entry.id))
+    }
+    public var canReorder: Bool {
+        !isUnsupportedInSettings && !isPinnedSystemItem && availability == .available && linkedIconCount == 1
+    }
     public var canSetVisibility: Bool {
+        if isUnsupportedInSettings { return false }
         if isPinnedSystemItem { return false }
         if entry.bundleID == ItemRegistry.organizerBundleID { return false }
         if entry.bundleID.hasPrefix("com.apple.") {
@@ -62,6 +74,13 @@ public struct RegistrySnapshot: Equatable, Sendable {
 public enum ItemRegistry {
     public static let organizerBundleID = "local.menubarorganizer.app"
     public static let timeMachinePositionID = "system-position:status:com.apple.systemuiserver::com.apple.menuextra.TimeMachine"
+    public static let unsupportedSystemPositionIDs: Set<String> = [
+        "system-position:module:FocusModes",
+        "system-position:module:AudioVideoModule",
+        "system-position:module:AirDrop",
+        "system-position:module:UserSwitcher",
+        "system-position:status:com.apple.systemuiserver::com.apple.menuextra.vpn"
+    ]
 
     public static func isPinnedSystemPosition(_ entry: LayoutEntry) -> Bool {
         guard entry.bundleID == "com.apple.controlcenter" || entry.bundleID == "com.apple.MenuBarAgent" else { return false }
@@ -98,9 +117,15 @@ public enum ItemRegistry {
     /// Legacy or unknown SystemUIServer rows cannot safely select the process-wide filter.
     public static func recoveringUnsupportedVisibility(in saved: LayoutDocument) throws -> LayoutDocument {
         var result = try saved.validated()
+        // Earlier builds offered a speculative Siri identity. It was not
+        // confirmed on this system, so discard those saved editable rows.
+        result.entries.removeAll {
+            $0.bundleID == "com.apple.Siri" || $0.bundleID == "com.apple.Siri.MenuExtra"
+        }
         func mustRemainVisible(_ entry: LayoutEntry) -> Bool {
             entry.bundleID == organizerBundleID || isPinnedSystemPosition(entry) ||
-                (entry.bundleID == "com.apple.systemuiserver" && entry.id != timeMachinePositionID)
+                (entry.bundleID == "com.apple.systemuiserver" && entry.id != timeMachinePositionID) ||
+                unsupportedSystemPositionIDs.contains(entry.id)
         }
         guard result.entries.contains(where: {
             $0.group == .hidden && mustRemainVisible($0)
@@ -193,7 +218,9 @@ public enum ItemRegistry {
         }
         let items = records.map { entry -> RegistryItem in
             guard let members = buckets[entry.id], let first = members.first else {
-                return RegistryItem(entry: entry, availability: .absent, linkedIconCount: 0)
+                return RegistryItem(entry: entry, availability: .absent, linkedIconCount: 0,
+                    isOmittedFromSettings: entry.bundleID == "com.apple.Siri" ||
+                        entry.bundleID == "com.apple.Siri.MenuExtra")
             }
             let hasExplicitID = first.identifier?.isEmpty == false
             let availability: ItemAvailability
@@ -209,6 +236,7 @@ public enum ItemRegistry {
             }
             return RegistryItem(entry: entry, availability: availability, linkedIconCount: members.count,
                                 isPinnedByDiscovery: first.isPinnedSystemItem,
+                                isOmittedFromSettings: first.isOmittedFromSettings,
                                 presentationSlot: slots[entry.id])
         }
         return RegistrySnapshot(layout: try layout.validated(), items: mergingDraft(items, with: layout), unknownOwnerCount: unknownOwners)

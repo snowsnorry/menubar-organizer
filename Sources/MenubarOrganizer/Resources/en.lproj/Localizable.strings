@@ -7,6 +7,7 @@
 "group.hidden" = "Hidden";
 "group.visible.count" = "Visible (%d)";
 "group.hidden.count" = "Hidden (%d)";
+"group.unsupported.count" = "Unsupported (%d)";
 "action.refresh" = "Refresh items";
 "action.moveEarlier" = "Move earlier in the group";
 "action.moveLater" = "Move later in the group";
@@ -82,10 +83,15 @@
 "system.nowPlaying" = "Now Playing";
 "system.accessibility" = "Accessibility";
 "system.userSwitcher" = "Fast User Switching";
+"system.user" = "User";
+"system.audioVideoControls" = "Audio and Video Controls";
+"system.airDrop" = "AirDrop";
 "system.keyboardBrightness" = "Keyboard Brightness";
+"system.vpn" = "VPN";
 "system.other" = "System Menu";
 "inspector.system" = "System menu item";
 "inspector.systemReadOnly" = "Shown in its menu bar position. Moving and hiding this system item are not supported yet.";
+"inspector.unsupported" = "This icon is not supported yet. Its menu bar visibility and position cannot be changed here.";
 "inspector.systemReorderable" = "Drag to change its position. This system item cannot be hidden.";
 "inspector.organizer" = "Drag to change the Organizer's position. Its control icon always stays visible.";
 "inspector.systemEditable" = "Drag to change its position, or move it to Hidden. System hiding may also affect Focus.";

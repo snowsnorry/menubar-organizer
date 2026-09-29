@@ -118,6 +118,13 @@ enum NativeDiscovery {
             guard children.count <= 128, inventory.count + children.count <= 512 else {
                 throw NativeDiscoveryError.inventoryLimitExceeded
             }
+            let configuredLegacyExtras = target.bundleID == "com.apple.systemuiserver"
+                ? (CFPreferencesCopyAppValue("menuExtras" as CFString,
+                    "com.apple.systemuiserver" as CFString) as? [String]) ?? [] : []
+            let legacyMetadata: [[String]] = try target.bundleID == "com.apple.systemuiserver"
+                ? children.map { try systemMetadata($0, deadline) } : []
+            let legacyKeys = SystemMenuItemKind.legacyPositionKeys(
+                metadataByChild: legacyMetadata, configuredExtras: configuredLegacyExtras)
             for (childIndex, child) in children.enumerated() {
                 let (identifier, rectangle) = try identityAndFrame(child, deadline)
                 let bundle = target.bundleID.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
@@ -141,16 +148,12 @@ enum NativeDiscovery {
                                                 launchDate: target.launchDate, displays: displays))
                     continue
                 }
-                var metadata = isSystem ? try systemMetadata(child, deadline) : []
-                // Legacy SystemUIServer extras can expose no AX label at all.
-                // The configured module is unambiguous only with one configured
-                // extra and one observed item; never zip preferences to positions.
-                if bundle == "com.apple.systemuiserver", children.count == 1,
-                   let modules = CFPreferencesCopyAppValue("menuExtras" as CFString, "com.apple.systemuiserver" as CFString) as? [String],
-                   modules.count == 1, let module = modules.first {
-                    metadata.append(URL(fileURLWithPath: module).lastPathComponent)
-                }
-                let kind = bundle.flatMap { SystemMenuItemKind.identify(bundleID: $0, metadata: metadata) }
+                let metadata = bundle == "com.apple.systemuiserver"
+                    ? legacyMetadata[childIndex] : (isSystem ? try systemMetadata(child, deadline) : [])
+                let legacyKey = bundle == "com.apple.systemuiserver" ? legacyKeys[childIndex] : nil
+                let kind = legacyKey == "status:com.apple.systemuiserver::com.apple.menuextra.TimeMachine"
+                    ? SystemMenuItemKind.timeMachine
+                    : bundle.flatMap { SystemMenuItemKind.identify(bundleID: $0, metadata: metadata) }
                 // Known module names have distinct keys in macOS 27's position
                 // table. Duplicate observations are rejected below and by the
                 // position store before a write.
@@ -159,22 +162,20 @@ enum NativeDiscovery {
                     let matches = SystemMenuItemKind.modulePositionKeys(metadata: metadata)
                     if matches.count == 1 {
                         positionKey = matches.first
-                    } else if matches.isEmpty, kind == .focus,
+                    } else if matches.isEmpty, kind == .keyboardBrightness,
                               metadata.contains(where: { value in
                                   let normalized = value.lowercased().filter { $0.isLetter || $0.isNumber }
-                                  return ["focus", "focusmodes", "donotdisturb", "фокусирование"].contains(normalized)
+                                  return ["keyboardbrightness", "яркостьклавиатуры"].contains(normalized)
                               }) {
-                        // The module's AX label is localized on some systems;
-                        // require an exact Focus label, never a substring from
-                        // the Control Center host's broader subtree.
-                        positionKey = "module:FocusModes"
+                        positionKey = "module:KeyboardBrightness"
                     } else {
                         positionKey = nil
                     }
+                } else if bundle == "com.apple.systemuiserver" {
+                    positionKey = legacyKey
                 } else if children.count == 1 {
                     positionKey = switch (bundle, kind) {
                     case ("com.apple.TextInputMenuAgent", .inputSource): "status:com.apple.TextInputMenuAgent::Item-0"
-                    case ("com.apple.systemuiserver", .timeMachine): "status:com.apple.systemuiserver::com.apple.menuextra.TimeMachine"
                     case ("com.apple.weather.menu", .weather): "status:com.apple.weather.menu::Item-0"
                     case ("com.apple.campo", .spotlight): "status:com.apple.campo::Item-0"
                     default: nil
@@ -187,14 +188,18 @@ enum NativeDiscovery {
                         !$0.contains("com.apple.") && !$0.contains("MenuExtraHost") && !$0.contains("MenuBarAgent") && $0.count <= 100
                     }) ?? L10n.text("system.other")
                     : target.name
+                let isReadOnlyModule = positionKey.map { UnsupportedModulePresence.keys.contains($0) } ?? false
                 inventory.append(NativeItem(item: DiscoveredItem(bundleID: bundle, identifier: identifier,
                     name: name, isDirectlyAccessible: false,
-                    isSupported: positionKey != nil || (bundle.map { !$0.hasPrefix("com.apple.") } ?? false),
+                    isSupported: (positionKey != nil && !isReadOnlyModule) ||
+                        (bundle.map { !$0.hasPrefix("com.apple.") } ?? false),
                     presentationID: isSystem ? "\(target.pid):\(childIndex)" : nil,
                     positionTableKey: positionKey,
                     isPinnedSystemItem: (bundle == "com.apple.controlcenter" || bundle == "com.apple.MenuBarAgent") &&
                         (positionKey == "module:Clock" || positionKey == "module:BentoBox-0" ||
-                         SystemMenuItemKind.isControlCenterStatusItem(metadata: metadata))),
+                         (positionKey == nil && kind == .controlCenter &&
+                          SystemMenuItemKind.isControlCenterStatusItem(metadata: metadata))),
+                    isOmittedFromSettings: kind == .siri),
                     pid: target.pid, frame: rectangle, launchDate: target.launchDate, displays: displays))
             }
         }

@@ -12,7 +12,8 @@ struct SettingsItemRow: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(item.displayName)
         .accessibilityValue(L10n.text("availability.\(item.availability.rawValue)"))
-        .accessibilityHint(L10n.text(item.entry.bundleID == ItemRegistry.organizerBundleID ? "inspector.organizer" : item.entry.bundleID.hasPrefix("com.apple.")
+        .accessibilityHint(L10n.text(item.isUnsupportedInSettings ? "inspector.unsupported" :
+            item.entry.bundleID == ItemRegistry.organizerBundleID ? "inspector.organizer" : item.entry.bundleID.hasPrefix("com.apple.")
             ? (item.canSetVisibility
                ? (item.canReorder ? "inspector.systemEditable" : "inspector.systemHideable")
                : item.canReorder ? "inspector.systemReorderable" : "inspector.systemReadOnly") : "row.hint"))

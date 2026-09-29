@@ -7,6 +7,7 @@
 "group.hidden" = "Скрытый";
 "group.visible.count" = "Видимые (%d)";
 "group.hidden.count" = "Скрытые (%d)";
+"group.unsupported.count" = "Не поддерживаются (%d)";
 "action.refresh" = "Обновить список";
 "action.moveEarlier" = "Переместить выше в группе";
 "action.moveLater" = "Переместить ниже в группе";
@@ -82,10 +83,15 @@
 "system.nowPlaying" = "Исполняется";
 "system.accessibility" = "Универсальный доступ";
 "system.userSwitcher" = "Смена пользователя";
+"system.user" = "Пользователь";
+"system.audioVideoControls" = "Управление аудио и видео";
+"system.airDrop" = "AirDrop";
 "system.keyboardBrightness" = "Яркость клавиатуры";
+"system.vpn" = "VPN";
 "system.other" = "Системное меню";
 "inspector.system" = "Системный элемент";
 "inspector.systemReadOnly" = "Показан на своём месте в строке меню. Перемещение и скрытие этого системного элемента пока не поддерживаются.";
+"inspector.unsupported" = "Этот значок пока не поддерживается. Здесь нельзя изменить его видимость или положение в строке меню.";
 "inspector.systemReorderable" = "Перетащите, чтобы изменить положение. Скрыть этот системный элемент нельзя.";
 "inspector.organizer" = "Перетащите, чтобы изменить положение Organizer. Его значок управления всегда остаётся видимым.";
 "inspector.systemEditable" = "Перетащите, чтобы изменить положение, или перенесите в «Скрытые». Скрытие системных значков может затронуть луну.";

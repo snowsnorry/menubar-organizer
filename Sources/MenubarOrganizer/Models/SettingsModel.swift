@@ -132,7 +132,9 @@ final class SettingsModel {
             return NSImage(systemSymbolName: "ellipsis", accessibilityDescription: nil)
         }
         if item.entry.bundleID.hasPrefix("com.apple.") {
-            let symbol = SystemMenuItemKind.identify(bundleID: item.entry.bundleID, metadata: [item.entry.name])?.symbol ?? "menubar.rectangle"
+            let symbol = SystemMenuItemKind.symbol(forPositionID: item.id) ??
+                SystemMenuItemKind.identify(bundleID: item.entry.bundleID,
+                    metadata: [item.entry.name])?.symbol ?? "menubar.rectangle"
             return NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
         }
         return icon(bundleID: item.entry.bundleID)
@@ -206,8 +208,10 @@ final class SettingsModel {
             try store.save(snapshot.layout)
             draft.updateCommitted(snapshot.layout, preservingChanges: editing)
             items = try ItemRegistry.reconcile(observations, with: document).items
-            if selectedID == nil || items.contains(where: { $0.id == selectedID && $0.isPinnedSystemItem }) {
-                selectedID = items.first(where: { !$0.isPinnedSystemItem })?.id
+            if selectedID == nil || items.contains(where: {
+                $0.id == selectedID && ($0.isPinnedSystemItem || $0.isOmittedFromSettings)
+            }) {
+                selectedID = items.first(where: { !$0.isPinnedSystemItem && !$0.isOmittedFromSettings })?.id
             }
             statusMessage = lastExplicitApplyFailure ?? (hasUnsavedChanges ? L10n.text("status.unsaved")
                 : requiresManualRetry ? L10n.text("status.manualRetry") : nil)

@@ -5,7 +5,9 @@ import OrganizerCore
 struct SettingsView: View {
     @Bindable var model: SettingsModel
 
-    private var selected: RegistryItem? { model.items.first { $0.id == model.selectedID && !$0.isPinnedSystemItem } }
+    private var selected: RegistryItem? { model.items.first {
+        $0.id == model.selectedID && !$0.isPinnedSystemItem && !$0.isOmittedFromSettings
+    } }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -98,6 +100,17 @@ struct SettingsView: View {
                 List(selection: $model.selectedID) {
                     ForEach(listRows) { row in
                         switch row {
+                        case .unsupportedHeader:
+                            Text(L10n.format("group.unsupported.count", unsupportedItems.count))
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .padding(.top, 4)
+                                .padding(.bottom, 6)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .listRowSeparator(.hidden)
+                                .selectionDisabled()
+                                .moveDisabled(true)
+                                .accessibilityAddTraits(.isHeader)
                         case .header(let group):
                             Text(L10n.format(group == .visible ? "group.visible.count" : "group.hidden.count", items(in: group).count))
                                 .font(.system(size: 13, weight: .semibold))
@@ -132,6 +145,7 @@ struct SettingsView: View {
         if let selected {
             SettingsInspector(item: selected,
                               icon: model.icon(for: selected),
+                              isUnsupported: selected.isUnsupportedInSettings,
                               canEdit: canChangeVisibility(selected),
                               canMoveEarlier: canMove(selected, offset: -1),
                               canMoveLater: canMove(selected, offset: 1),
@@ -197,11 +211,13 @@ struct SettingsView: View {
     }
 
     private enum ListRow: Identifiable {
+        case unsupportedHeader
         case header(ItemGroup)
         case item(RegistryItem)
 
         var id: String {
             switch self {
+            case .unsupportedHeader: "section-header:unsupported"
             case .header(let group): "section-header:\(group.rawValue)"
             case .item(let item): item.id
             }
@@ -209,13 +225,20 @@ struct SettingsView: View {
     }
 
     private var listRows: [ListRow] {
-        ItemGroup.allCases.flatMap { group in
+        let unsupported: [ListRow] = unsupportedItems.isEmpty ? [] :
+            [.unsupportedHeader] + unsupportedItems.map(ListRow.item)
+        return unsupported + ItemGroup.allCases.flatMap { group in
             [.header(group)] + items(in: group).map(ListRow.item)
         }
     }
 
+    private var unsupportedItems: [RegistryItem] {
+        model.items.filter { $0.isUnsupportedInSettings && !$0.isPinnedSystemItem && !$0.isOmittedFromSettings }
+    }
+
     private func items(in group: ItemGroup) -> [RegistryItem] {
-        model.items.filter { $0.entry.group == group && !$0.isPinnedSystemItem }
+        model.items.filter { $0.entry.group == group && !$0.isUnsupportedInSettings &&
+            !$0.isPinnedSystemItem && !$0.isOmittedFromSettings }
     }
 
     private func canReorder(_ item: RegistryItem) -> Bool {

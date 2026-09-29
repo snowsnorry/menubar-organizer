@@ -118,9 +118,16 @@ public actor LayoutCoordinator {
                                   hidden: hidden, adjusted: false)
         while true {
             guard token == generation else { return nil }
-            let unsafe = Set(result.snapshot.items.filter {
-                $0.availability != .absent && !$0.canSetVisibility
-            }.map { item in ItemRegistry.systemVisibilityTarget(for: item.entry) ?? item.entry.bundleID })
+            let unsafe = Set(result.snapshot.items.compactMap { item -> String? in
+                guard item.availability != .absent, !item.canSetVisibility else { return nil }
+                if item.entry.bundleID.hasPrefix("com.apple.") {
+                    // An unrelated read-only sibling has no filter target of
+                    // its own. In particular, Siri and VPN must not revoke
+                    // Time Machine's explicitly selected SystemUIServer filter.
+                    return ItemRegistry.systemVisibilityTarget(for: item.entry)
+                }
+                return item.entry.bundleID
+            })
             // Absence after hiding is expected and does not prove ineligibility.
             let safe = result.hidden.subtracting(unsafe)
             guard safe != result.hidden else { return result }

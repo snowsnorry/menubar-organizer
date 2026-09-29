@@ -4,7 +4,7 @@ import Foundation
 public enum SystemMenuItemKind: String, CaseIterable, Sendable {
     case timeMachine, inputSource, clock, controlCenter, battery, wifi, bluetooth
     case sound, focus, spotlight, siri, weather, screenMirroring, displays
-    case nowPlaying, accessibility, userSwitcher, keyboardBrightness
+    case nowPlaying, accessibility, userSwitcher, keyboardBrightness, vpn
 
     public var localizationKey: String { "system.\(rawValue)" }
 
@@ -28,6 +28,18 @@ public enum SystemMenuItemKind: String, CaseIterable, Sendable {
         case .accessibility: "accessibility"
         case .userSwitcher: "person.crop.circle"
         case .keyboardBrightness: "keyboard"
+        case .vpn: "network"
+        }
+    }
+
+    /// Presentation symbols for read-only modules whose localized AX titles
+    /// may change or disappear while the menu bar is collapsed.
+    public static func symbol(forPositionID id: String) -> String? {
+        switch id {
+        case "system-position:module:AudioVideoModule": "video.badge.waveform"
+        case "system-position:module:AirDrop": "dot.radiowaves.left.and.right"
+        case "system-position:module:UserSwitcher": "person.crop.circle"
+        default: nil
         }
     }
 
@@ -35,15 +47,65 @@ public enum SystemMenuItemKind: String, CaseIterable, Sendable {
     /// A display name may identify an icon without identifying its table key.
     public static func modulePositionKeys(metadata: [String]) -> Set<String> {
         let modules: [String: String] = [
-            "FocusModes": "module:FocusModes", "Battery": "module:Battery",
+            "FocusModes": "module:FocusModes",
+            "com.apple.menuextra.focusmode": "module:FocusModes",
+            "com.apple.menuextra.audiovideo": "module:AudioVideoModule",
+            "com.apple.menuextra.airdrop": "module:AirDrop",
+            "com.apple.menuextra.user": "module:UserSwitcher",
+            "Battery": "module:Battery",
             "Bluetooth": "module:Bluetooth", "Clock": "module:Clock",
             "Displays": "module:Displays", "KeyboardBrightness": "module:KeyboardBrightness",
+            "com.apple.controlcenter.KeyboardBrightness": "module:KeyboardBrightness",
             "Sound": "module:Sound", "WiFi": "module:WiFi",
             "com.apple.controlcenter.WiFi": "module:WiFi",
             "com.apple.menuextra.wifi": "module:WiFi",
             "ScreenMirroring": "module:ScreenMirroring", "BentoBox": "module:BentoBox-0"
         ]
         return Set(metadata.compactMap { modules[$0] })
+    }
+
+    /// A SystemUIServer process may host several legacy extras. Match each
+    /// child against its own metadata and the configured bundle, never its index.
+    public static func legacyPositionKey(metadata: [String], configuredExtras: [String]) -> String? {
+        let configured = Set(configuredExtras.map { URL(fileURLWithPath: $0).lastPathComponent })
+        let candidates: [(menu: String, identifier: String, markers: Set<String>)] = [
+            ("TimeMachine.menu", "com.apple.menuextra.TimeMachine",
+             ["com.apple.menuextra.TimeMachine", "TimeMachine.menu", "TimeMachineMenuExtra.TMMenuExtraHost", "Time Machine"]),
+            ("VPN.menu", "com.apple.menuextra.vpn",
+             ["com.apple.menuextra.vpn", "VPN.menu", "VPN"])
+        ]
+        let matches = candidates.filter { candidate in
+            configured.contains(candidate.menu) && metadata.contains { value in
+                if candidate.markers.contains(value) { return true }
+                let normalized = value.lowercased().filter { $0.isLetter || $0.isNumber }
+                return candidate.menu == "TimeMachine.menu"
+                    ? normalized.contains("timemachine")
+                    : normalized == "vpn" || normalized == "comapplemenuextravpn"
+            }
+        }
+        guard matches.count == 1 else { return nil }
+        return "status:com.apple.systemuiserver::\(matches[0].identifier)"
+    }
+
+    /// Resolve an unlabelled legacy extra only when the complete owner inventory
+    /// leaves exactly one configured extra and exactly one empty AX child.
+    /// A changing generic title such as "System Menu" is never an identity.
+    public static func legacyPositionKeys(metadataByChild: [[String]],
+                                          configuredExtras: [String]) -> [String?] {
+        var keys = metadataByChild.map {
+            legacyPositionKey(metadata: $0, configuredExtras: configuredExtras)
+        }
+        let configured = Set(configuredExtras.map { URL(fileURLWithPath: $0).lastPathComponent })
+        let known: [String: String] = [
+            "TimeMachine.menu": "status:com.apple.systemuiserver::com.apple.menuextra.TimeMachine",
+            "VPN.menu": "status:com.apple.systemuiserver::com.apple.menuextra.vpn"
+        ]
+        let unmatched = configured.compactMap { known[$0] }.filter { !keys.contains($0) }
+        let empty = metadataByChild.indices.filter { metadataByChild[$0].isEmpty && keys[$0] == nil }
+        guard configured.allSatisfy({ known[$0] != nil }), unmatched.count == 1,
+              empty.count == 1 else { return keys }
+        keys[empty[0]] = unmatched[0]
+        return keys
     }
 
     /// The Control Center host also owns unrelated status items, so its bundle
@@ -75,6 +137,7 @@ public enum SystemMenuItemKind: String, CaseIterable, Sendable {
             (.controlCenter, ["bentobox", "primarybento", "пунктуправления"]),
             (.screenMirroring, ["screenmirroring", "повторэкрана"]),
             (.keyboardBrightness, ["keyboardbrightness", "яркостьклавиатуры"]),
+            (.vpn, ["vpn", "comapplemenuextravpn"]),
             (.nowPlaying, ["nowplaying", "исполняется"]),
             (.userSwitcher, ["userswitcher", "fastuserswitching", "сменапользователя"]),
             (.accessibility, ["accessibility", "универсальныйдоступ"]),
