@@ -36,6 +36,8 @@ public struct LayoutApplyReport: Sendable {
     public var deferredIDs: [String]
     public var error: String?
     public var fallbackError: String?
+    /// AX can retain a system row after its icon has disappeared. Diagnostic only.
+    public var unverifiedSystemTargets: [String]
 }
 
 /// Explicit apply requests only. Passive discovery must not invoke this actor.
@@ -132,7 +134,8 @@ public actor LayoutCoordinator {
 
     private func perform(_ document: LayoutDocument, revealed: Bool, allowReordering: Bool, token: UInt64) async -> LayoutApplyReport {
         var report = LayoutApplyReport(status: .superseded, visibilityApplied: false, snapshot: nil,
-                                       observedOrder: [], movedCount: 0, deferredIDs: [], error: nil, fallbackError: nil)
+                                       observedOrder: [], movedCount: 0, deferredIDs: [], error: nil,
+                                       fallbackError: nil, unverifiedSystemTargets: [])
         guard token == generation else { return report }
         do {
             let document = try document.validated()
@@ -162,23 +165,21 @@ public actor LayoutCoordinator {
             var snapshot = try ItemRegistry.reconcile(observations, with: document)
             report.snapshot = snapshot
             report.observedOrder = observedIDs(observations)
-            func visibleHiddenSystemTargets(in snapshot: RegistrySnapshot) -> Set<String> {
+            func observedHiddenSystemTargets(in snapshot: RegistrySnapshot) -> Set<String> {
                 Set(snapshot.items.compactMap { item -> String? in
                     guard item.availability == .available,
                           let target = ItemRegistry.systemVisibilityTarget(for: item.entry),
-                          // The process-wide Time Machine filter can leave an
-                          // AX row visible after the icon disappears. Treating
-                          // that row as proof of failure releases every hidden
-                          // application, including unrelated ones.
+                          // The process-wide Time Machine filter is known to
+                          // leave an AX row after its icon disappears.
                           target != "com.apple.systemuiserver",
                           hidden.contains(target) else { return nil }
                     return target
                 })
             }
-            var stillVisibleSystemTargets = visibleHiddenSystemTargets(in: snapshot)
-            if !stillVisibleSystemTargets.isEmpty {
+            var remainingSystemRows = observedHiddenSystemTargets(in: snapshot)
+            if !remainingSystemRows.isEmpty {
                 // Assessment activation can precede the menu bar's redraw.
-                // Verify once more before releasing every hidden target.
+                // Check once more for diagnostics, without replacing the filter.
                 try await Task.sleep(for: .milliseconds(300))
                 guard token == generation else { return report }
                 observations = try await backend.discover()
@@ -186,18 +187,18 @@ public actor LayoutCoordinator {
                 snapshot = try ItemRegistry.reconcile(observations, with: document)
                 report.snapshot = snapshot
                 report.observedOrder = observedIDs(observations)
-                stillVisibleSystemTargets = visibleHiddenSystemTargets(in: snapshot)
+                remainingSystemRows = observedHiddenSystemTargets(in: snapshot)
             }
-            if !stillVisibleSystemTargets.isEmpty {
-                try await backend.setHiddenApplications([])
-                report.status = .partial
-                report.error = "systemVisibilityNotVerified"
-                return report
+            if !remainingSystemRows.isEmpty {
+                // AX presence alone is not evidence that the icon is visible.
+                // Replacing the assertion here exposes every hidden icon briefly.
+                report.unverifiedSystemTargets = remainingSystemRows.sorted()
             }
             guard let checked = try await enforceSafeVisibility(observations, document: document, hidden: hidden, token: token) else { return report }
             if checked.adjusted {
                 report.snapshot = checked.snapshot
                 report.observedOrder = observedIDs(checked.observations)
+                report.visibilityApplied = !checked.hidden.isEmpty
                 report.status = .partial
                 report.error = "Visibility eligibility changed; unsafe applications were revealed."
                 return report

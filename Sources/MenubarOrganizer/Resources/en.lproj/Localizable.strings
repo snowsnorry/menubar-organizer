@@ -90,7 +90,6 @@
 "inspector.organizer" = "Drag to change the Organizer's position. Its control icon always stays visible.";
 "inspector.systemEditable" = "Drag to change its position, or move it to Hidden. System hiding may also affect Focus.";
 "inspector.systemHideable" = "Move this system item to Hidden. System hiding may also affect Focus.";
-"status.systemVisibilityNotVerified" = "macOS did not hide the selected system icon. The visibility filter was removed; the saved choice can be retried.";
 "status.manualRetry" = "The previous attempt did not apply. Press OK to retry your saved visibility choices.";
 "inspector.timeMachine" = "Drag to change its position, or move it to Hidden. This filters SystemUIServer as a whole; other system icons may be affected. Focus disappeared in the last live test.";
 "positionAccess.title" = "Allow menu bar rearrangement";

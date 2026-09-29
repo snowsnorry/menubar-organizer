@@ -100,7 +100,7 @@ final class LayoutCoordinatorTests: XCTestCase {
         XCTAssertEqual(visibility, [["org.a"], [], ["org.a"]])
     }
 
-    func testSystemHideIsNotReportedAppliedWhileIconRemainsVisible() async throws {
+    func testSystemAXRowDoesNotReplaceAcceptedVisibilityFilter() async throws {
         let bluetooth = DiscoveredItem(bundleID: "com.apple.controlcenter", identifier: nil,
             name: "Bluetooth", positionTableKey: "module:Bluetooth")
         let backend = FakeLayoutBackend([bluetooth])
@@ -108,9 +108,29 @@ final class LayoutCoordinatorTests: XCTestCase {
         let hidden = try LayoutEditor.move(initial.items[0].id, to: .hidden, at: 0, in: initial.layout)
         let report = await LayoutCoordinator(backend: backend).apply(hidden, allowReordering: false)
         let requests = await backend.visibilityRequests()
-        XCTAssertEqual(report.status, .partial)
-        XCTAssertEqual(report.error, "systemVisibilityNotVerified")
-        XCTAssertEqual(requests, [["system-item:1"], []])
+        XCTAssertEqual(report.status, .applied)
+        XCTAssertTrue(report.visibilityApplied)
+        XCTAssertEqual(report.unverifiedSystemTargets, ["system-item:1"])
+        XCTAssertEqual(requests, [["system-item:1"]])
+    }
+
+    func testSystemAXRowDoesNotRevealHiddenApplication() async throws {
+        let bluetooth = DiscoveredItem(bundleID: "com.apple.controlcenter", identifier: nil,
+            name: "Bluetooth", positionTableKey: "module:Bluetooth")
+        let app = item("hidden")
+        let backend = FakeLayoutBackend([bluetooth, app])
+        await backend.omitHiddenFromDiscovery()
+        let initial = try ItemRegistry.reconcile([bluetooth, app], with: LayoutDocument())
+        let withSystemHidden = try LayoutEditor.move(initial.items[0].id, to: .hidden, at: 0, in: initial.layout)
+        let saved = try LayoutEditor.move(initial.items[1].id, to: .hidden, at: 1, in: withSystemHidden)
+
+        let report = await LayoutCoordinator(backend: backend).apply(saved, allowReordering: false)
+
+        XCTAssertEqual(report.status, .applied)
+        XCTAssertTrue(report.visibilityApplied)
+        XCTAssertEqual(report.unverifiedSystemTargets, ["system-item:1"])
+        let requests = await backend.visibilityRequests()
+        XCTAssertEqual(requests, [["system-item:1", "org.hidden"]])
     }
 
     func testReordersWithinEachGroupWithoutForcingGroupBoundary() async {
@@ -372,6 +392,20 @@ final class LayoutCoordinatorTests: XCTestCase {
         XCTAssertTrue(report.visibilityApplied)
         let requests = await backend.visibilityRequests()
         XCTAssertEqual(requests, [["org.a"]])
+    }
+
+    func testEligibilityChangeKeepsOtherHiddenApplicationActive() async {
+        let a = item("a"), b = item("b")
+        let backend = FakeLayoutBackend([a, b])
+        await backend.addOnDiscovery(2, items: [a])
+
+        let report = await LayoutCoordinator(backend: backend)
+            .apply(document([a, b], hidden: ["a", "b"]), allowReordering: false)
+
+        XCTAssertEqual(report.status, .partial)
+        XCTAssertTrue(report.visibilityApplied)
+        let requests = await backend.visibilityRequests()
+        XCTAssertEqual(requests, [["org.a", "org.b"], ["org.b"]])
     }
 
     func testAmbiguousSiblingAfterMoveImmediatelyRevealsAndStops() async {

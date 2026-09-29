@@ -190,7 +190,7 @@ final class NativeBackend: LayoutBackend {
         try await task.value
     }
 
-    private enum MoveError: Error {
+    enum MoveError: Error, Equatable {
         case explicitConfirmationRequired, unavailable, expired
     }
 

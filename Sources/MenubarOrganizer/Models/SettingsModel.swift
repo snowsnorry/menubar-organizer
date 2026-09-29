@@ -42,6 +42,8 @@ final class SettingsModel {
     @ObservationIgnored private var lifecycleSuspended = false
     @ObservationIgnored private var lifecycleRecoveryInProgress = false
     @ObservationIgnored private var pendingAutomaticRestore = false
+    @ObservationIgnored private var automaticRecoveryTask: Task<Void, Never>?
+    @ObservationIgnored private var automaticRecoveryAttempt = 0
     @ObservationIgnored private var lastAppliedHiddenLayout: LayoutDocument?
     @ObservationIgnored private var pendingRestore = false
     @ObservationIgnored private var pendingLaunchOrderRestore = false
@@ -62,6 +64,7 @@ final class SettingsModel {
         coordinator = LayoutCoordinator(backend: backend)
         backend.visibility.onInvalidated = { [weak self] error in
             guard let self, !self.stopped, !self.isPreview else { return }
+            self.finishAutomaticRecovery()
             self.timer?.cancel(); self.timer = nil
             self.visibilityRevision &+= 1
             _ = self.reveal.suspend(reason: .backendUnavailable)
@@ -217,6 +220,9 @@ final class SettingsModel {
                 statusMessage = lastExplicitApplyFailure ?? L10n.text("status.failed")
             }
             finishBusy(token: token)
+            if pendingAutomaticRestore, isTransientInventoryError(error) {
+                scheduleAutomaticRecovery()
+            }
             return
         }
         guard token == revision, !stopped else { return }
@@ -233,6 +239,7 @@ final class SettingsModel {
                                                            snapshot: readOnlySnapshot) {
             pendingRestore = false
             pendingAutomaticRestore = false
+            finishAutomaticRecovery()
             finishBusy(token: token)
             return
         }
@@ -273,8 +280,7 @@ final class SettingsModel {
         } else {
             finishBusy(token: token)
         }
-        if (backend.visibility.isActive && reveal.state == .collapsed) ||
-            !pendingRestore || requiresManualRetry {
+        if (backend.visibility.isActive && reveal.state == .collapsed) || !pendingRestore {
             pendingAutomaticRestore = false
         }
     }
@@ -650,6 +656,12 @@ final class SettingsModel {
                 items = snapshot.items
                 if hasUnsavedChanges { publishDraft() }
             }
+            if !report.unverifiedSystemTargets.isEmpty {
+                // These values are fixed system target identifiers, never app names.
+                let targets = report.unverifiedSystemTargets.joined(separator: ",")
+                Logger(subsystem: "local.menubarorganizer.app", category: "visibility")
+                    .notice("System icon AX rows remain after visibility activation; targets=\(targets, privacy: .public)")
+            }
             // A failed native move can roll back its position-table write while
             // the proposed order has already been saved. Reconcile only the
             // actually observed, movable visible rows so the list does not
@@ -699,9 +711,7 @@ final class SettingsModel {
                     statusMessage = L10n.text("status.manualRetry")
                 }
             case .partial:
-                statusMessage = report.error == "systemVisibilityNotVerified"
-                    ? L10n.text("status.systemVisibilityNotVerified")
-                    : report.error == "nonintrusiveReorderingUnavailable"
+                statusMessage = report.error == "nonintrusiveReorderingUnavailable"
                     ? L10n.text("status.orderSavedNotApplied")
                     : report.error == "obstructed"
                     ? L10n.text("status.partial") + " " + L10n.text("status.reorderObstructed")
@@ -710,6 +720,13 @@ final class SettingsModel {
                     : L10n.text("status.partial")
             case .failed: statusMessage = layoutErrorMessage(report.error)
             case .superseded: break
+            }
+            if report.visibilityApplied, backend.visibility.isActive {
+                finishAutomaticRecovery()
+            }
+            if pendingAutomaticRestore, !report.visibilityApplied,
+               report.error == "expired" || report.error == "staleGeometry" || report.error == "timeBudgetExceeded" {
+                scheduleAutomaticRecovery()
             }
             if explicit, report.status == .failed || report.status == .partial {
                 lastExplicitApplyFailure = statusMessage
@@ -804,8 +821,7 @@ final class SettingsModel {
         lifecycleRecoveryInProgress = true
         defer { lifecycleRecoveryInProgress = false }
         await refresh(adoptObserved: false, restoreSaved: true)
-        if (backend.visibility.isActive && reveal.state == .collapsed) ||
-            !pendingRestore || requiresManualRetry {
+        if (backend.visibility.isActive && reveal.state == .collapsed) || !pendingRestore {
             pendingAutomaticRestore = false
         }
     }
@@ -830,6 +846,7 @@ final class SettingsModel {
     func stop() async {
         guard !isPreview else { stopped = true; return }
         stopped = true
+        automaticRecoveryTask?.cancel(); automaticRecoveryTask = nil
         refreshAfterBusy = false
         backend.cancelGestures()
         revision &+= 1
@@ -847,12 +864,47 @@ final class SettingsModel {
 
     private var now: Double { ProcessInfo.processInfo.systemUptime }
 
+    private func isTransientInventoryError(_ error: any Error) -> Bool {
+        if let discovery = error as? NativeDiscoveryError {
+            return discovery == .staleGeometry || discovery == .timeBudgetExceeded
+        }
+        return (error as? NativeBackend.MoveError) == .expired
+    }
+
+    private func scheduleAutomaticRecovery() {
+        guard !stopped, automaticRecoveryTask == nil else { return }
+        let delays = [0.5, 1.0, 2.0, 4.0, 8.0]
+        guard automaticRecoveryAttempt < delays.count else { return }
+        let delay = delays[automaticRecoveryAttempt]
+        automaticRecoveryAttempt += 1
+        Logger(subsystem: "local.menubarorganizer.app", category: "visibility")
+            .notice("Retrying automatic visibility recovery after transient inventory change; attempt=\(self.automaticRecoveryAttempt)")
+        automaticRecoveryTask = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(delay)) } catch { return }
+            guard let self, !Task.isCancelled, !self.stopped else { return }
+            self.automaticRecoveryTask = nil
+            if self.isBusy {
+                self.refreshAfterBusy = true
+                return
+            }
+            Logger(subsystem: "local.menubarorganizer.app", category: "visibility")
+                .notice("Running automatic visibility recovery retry; attempt=\(self.automaticRecoveryAttempt)")
+            await self.refresh(adoptObserved: false)
+        }
+    }
+
+    private func finishAutomaticRecovery() {
+        automaticRecoveryTask?.cancel()
+        automaticRecoveryTask = nil
+        automaticRecoveryAttempt = 0
+    }
+
     private func finishBusy(token: UInt64) {
         guard token == revision else { return }
         isBusy = false
         guard refreshAfterBusy, !confirming, !stopped, !lifecycleSuspended else { return }
-        // One coalesced follow-up per external request burst. Failure/partial
-        // results retain pendingRestore but never schedule their own retry.
+        // One coalesced follow-up per external request burst. Transient
+        // automatic recovery failures use their own bounded retry task.
         refreshAfterBusy = false
         Task { [weak self] in
             guard let self, !self.stopped, !self.lifecycleSuspended, token == self.revision else { return }
@@ -890,6 +942,12 @@ final class SettingsModel {
     private func layoutErrorCode(_ error: String?) -> String {
         // Never emit raw error text: associated values may include application
         // identifiers, names, paths, or messages from another process.
+        if error == "Visibility eligibility changed; unsafe applications were revealed." {
+            return "visibilityEligibilityChanged"
+        }
+        if error?.hasPrefix("targetNotRunning(") == true { return "targetNotRunning" }
+        if error?.hasPrefix("invalidTarget(") == true { return "invalidTarget" }
+        if error?.hasPrefix("activationFailed(") == true { return "activationFailed" }
         let permitted: Set<String> = [
             "unsupportedBuild", "runtimeUnavailable", "competingManager",
             "allocationFailed", "activationTimedOut", "superseded", "inventoryChanged",
@@ -969,6 +1027,7 @@ final class SettingsModel {
                 guard token == visibilityRevision, !stopped else { return }
                 reveal.confirmVisibility(hidden.isEmpty ? .visible : .hidden)
                 if effect == .hideHidden, !hidden.isEmpty {
+                    finishAutomaticRecovery()
                     lastAppliedHiddenLayout = draft.committed
                 }
                 if effect == .showHidden {
