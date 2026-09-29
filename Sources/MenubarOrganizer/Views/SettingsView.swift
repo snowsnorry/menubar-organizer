@@ -305,7 +305,14 @@ struct SettingsView: View {
         let remainingEntries = model.layoutEntries.filter {
             $0.group == group && (source.entry.group == group ? $0.id != source.id : $0.bundleID != source.entry.bundleID)
         }
-        let index = remainingEntries.filter { precedingIDs.contains($0.id) }.count
+        // The displayed group omits pinned and unsupported system rows, but
+        // LayoutEditor expects an index in the complete persisted group.
+        // Anchor the insertion to the next displayed item in that full group.
+        let displayedIDs = items(in: group).filter {
+            source.entry.group != group || $0.id != source.id
+        }.map(\.id)
+        let index = LayoutEditor.insertionIndex(in: remainingEntries, displayedIDs: displayedIDs,
+                                                precedingIDs: precedingIDs)
         Task { await model.move(id: source.id, to: group, at: index) }
     }
 }

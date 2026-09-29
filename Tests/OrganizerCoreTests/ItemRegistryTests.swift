@@ -105,6 +105,19 @@ final class ItemRegistryTests: XCTestCase {
         XCTAssertThrowsError(try LayoutEditor.adoptObservedOrder(["b", "b"], group: .visible, in: document))
     }
 
+    func testSettingsInsertionUsesDisplayedNeighborAcrossReadOnlySavedRows() {
+        let ids = ["focus", "vpn", "input", "battery", "clock", "organizer"]
+        let destination = ids.map { LayoutEntry(id: $0, bundleID: "org.\($0)", name: $0) }
+        let displayed = ["input", "battery", "organizer"]
+
+        XCTAssertEqual(LayoutEditor.insertionIndex(in: destination, displayedIDs: displayed,
+                                                   precedingIDs: []), 2)
+        XCTAssertEqual(LayoutEditor.insertionIndex(in: destination, displayedIDs: displayed,
+                                                   precedingIDs: ["input", "battery"]), 5)
+        XCTAssertEqual(LayoutEditor.insertionIndex(in: destination, displayedIDs: displayed,
+                                                   precedingIDs: Set(displayed)), 6)
+    }
+
     func testNewSiblingInheritsApplicationWideVisibility() throws {
         let saved = LayoutDocument(entries: [LayoutEntry(id: ItemRegistry.key(bundleID: "org.app", identifier: "a"),
             bundleID: "org.app", name: "App", group: .hidden)])
@@ -269,6 +282,26 @@ final class ItemRegistryTests: XCTestCase {
         XCTAssertThrowsError(try LayoutEditor.move("system-position:module:FocusModes", to: .hidden, at: 1, in: hidden))
         XCTAssertThrowsError(try LayoutEditor.move("system-position:module:Clock", to: .hidden, at: 1, in: hidden))
         XCTAssertThrowsError(try LayoutEditor.move("system-position:module:Clock", to: .visible, at: 0, in: hidden))
+    }
+
+    func testHiddenSystemModulesSurviveDelayedRediscoveryWhenHidingAnotherApp() throws {
+        let saved = LayoutDocument(entries: [
+            LayoutEntry(id: "system-position:module:Bluetooth", bundleID: "com.apple.MenuBarAgent",
+                        name: "Bluetooth", group: .hidden),
+            LayoutEntry(id: "system-position:module:KeyboardBrightness", bundleID: "com.apple.MenuBarAgent",
+                        name: "Keyboard Brightness", group: .hidden),
+            LayoutEntry(id: ItemRegistry.timeMachinePositionID, bundleID: "com.apple.systemuiserver",
+                        name: "Time Machine", group: .hidden),
+            LayoutEntry(id: "app:us.zoom.xos", bundleID: "us.zoom.xos",
+                        name: "Zoom", group: .hidden)
+        ])
+        // Immediately after releasing the old filter, the system icons may
+        // still be absent even though Zoom has become observable.
+        let snapshot = try ItemRegistry.reconcile([
+            DiscoveredItem(bundleID: "us.zoom.xos", identifier: nil, name: "Zoom")
+        ], with: saved)
+        XCTAssertEqual(ItemRegistry.eligibleHiddenApplications(in: snapshot),
+                       ["system-item:1", "system-item:4", "us.zoom.xos"])
     }
 
     func testPinnedSystemItemsStayOutOfEditableRowsAndRecoverOldLayouts() throws {

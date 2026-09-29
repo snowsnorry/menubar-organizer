@@ -308,8 +308,14 @@ public enum ItemRegistry {
     public static func eligibleHiddenApplications(in snapshot: RegistrySnapshot) -> Set<String> {
         let systemTargets = snapshot.items.compactMap { item -> String? in
             guard item.entry.group == .hidden, item.canSetVisibility,
-                  item.availability == .available || item.availability == .overflow else { return nil }
-            return systemVisibilityTarget(for: item.entry)
+                  let target = systemVisibilityTarget(for: item.entry) else { return nil }
+            // A system module hidden by the old assertion may still be absent
+            // from AX immediately after that assertion is released. Its exact
+            // numeric system-item target remains safe to carry into the new
+            // assertion. Process-wide system owners still require observation.
+            guard item.availability == .available || item.availability == .overflow ||
+                  (item.availability == .absent && target.hasPrefix("system-item:")) else { return nil }
+            return target
         }
         let groups = Dictionary(grouping: snapshot.items.filter { !$0.entry.bundleID.hasPrefix("com.apple.") }, by: { $0.entry.bundleID })
         let applications: [String] = groups.compactMap { bundle, items -> String? in
@@ -327,6 +333,22 @@ public enum LayoutEditError: Error, Equatable {
 }
 
 public enum LayoutEditor {
+    /// Translate an insertion in the settings list to the saved group's index.
+    /// The list may omit read-only system rows that still occupy saved slots.
+    public static func insertionIndex(in destination: [LayoutEntry], displayedIDs: [String],
+                                      precedingIDs: Set<String>) -> Int {
+        let displayedIndex = displayedIDs.filter { precedingIDs.contains($0) }.count
+        if displayedIDs.indices.contains(displayedIndex),
+           let next = destination.firstIndex(where: { $0.id == displayedIDs[displayedIndex] }) {
+            return next
+        }
+        if displayedIndex > 0,
+           let previous = destination.firstIndex(where: { $0.id == displayedIDs[displayedIndex - 1] }) {
+            return previous + 1
+        }
+        return destination.count
+    }
+
     /// Insertion index refers to the destination group after moved records have
     /// been removed. A cross-group move carries all third-party application icons.
     public static func move(_ id: String, to group: ItemGroup, at index: Int, in document: LayoutDocument) throws -> LayoutDocument {

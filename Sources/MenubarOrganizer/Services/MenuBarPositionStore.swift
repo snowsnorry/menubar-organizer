@@ -173,7 +173,7 @@ final class MenuBarPositionStore {
         do {
             let hasSystemModule = source.item.positionTableKey?.hasPrefix("module:") == true ||
                 target.item.positionTableKey?.hasPrefix("module:") == true
-            let deadline = ContinuousClock.now.advanced(by: hasSystemModule ? .seconds(3) : .seconds(2))
+            let deadline = ContinuousClock.now.advanced(by: hasSystemModule ? .seconds(5) : .seconds(4))
             func sameItem(_ current: NativeItem, _ original: NativeItem) -> Bool {
                 current.pid == original.pid && current.launchDate == original.launchDate &&
                     current.item.bundleID == original.item.bundleID &&
@@ -205,8 +205,24 @@ final class MenuBarPositionStore {
                         return NativeItem(item: old.item, pid: entry.pid, frame: entry.frame,
                                           launchDate: entry.launchDate, displays: entry.displays)
                     }
-                    guard orderedIDs(restored) == expected else { throw Failure.noReflow }
-                    return restored
+                    let actual = orderedIDs(restored)
+                    if actual.filter({ $0 == sourceID }).count == 1,
+                       actual.filter({ $0 == targetID }).count == 1,
+                       let movedIndex = actual.firstIndex(of: sourceID),
+                       let anchorIndex = actual.firstIndex(of: targetID),
+                       (placement == .before ? movedIndex < anchorIndex
+                                             : movedIndex > anchorIndex) {
+                        if actual != expected {
+                            // macOS can rearrange other items while crossing a
+                            // read-only module. The caller saves the full
+                            // observed order after this verified relation.
+                            logger.notice("Position move succeeded with menu-bar reflow; expectedAdjacent=\(abs(movedIndex - anchorIndex) == 1, privacy: .public)")
+                        }
+                        return restored
+                    }
+                    // AX can report an intermediate order during reflow. Keep
+                    // checking until the deadline instead of rolling back on
+                    // the first inconsistent full scan.
                 }
                 try await Task.sleep(for: .milliseconds(40))
             }
