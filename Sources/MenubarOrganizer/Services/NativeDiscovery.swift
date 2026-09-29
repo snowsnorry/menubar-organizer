@@ -162,6 +162,9 @@ enum NativeDiscovery {
                     let matches = SystemMenuItemKind.modulePositionKeys(metadata: metadata)
                     if matches.count == 1 {
                         positionKey = matches.first
+                    } else if matches.isEmpty,
+                              kind == .displays || kind == .screenMirroring {
+                        positionKey = SystemMenuItemKind.modulePositionKeyForKnownTitle(metadata: metadata)
                     } else if matches.isEmpty, kind == .keyboardBrightness,
                               metadata.contains(where: { value in
                                   let normalized = value.lowercased().filter { $0.isLetter || $0.isNumber }

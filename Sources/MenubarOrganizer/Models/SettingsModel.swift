@@ -208,10 +208,13 @@ final class SettingsModel {
             try store.save(snapshot.layout)
             draft.updateCommitted(snapshot.layout, preservingChanges: editing)
             items = try ItemRegistry.reconcile(observations, with: document).items
-            if selectedID == nil || items.contains(where: {
-                $0.id == selectedID && ($0.isPinnedSystemItem || $0.isOmittedFromSettings)
+            if !items.contains(where: {
+                $0.id == selectedID && !$0.isPinnedSystemItem && !$0.isOmittedFromSettings &&
+                    !$0.isUnavailableVisibleSystemItem
             }) {
-                selectedID = items.first(where: { !$0.isPinnedSystemItem && !$0.isOmittedFromSettings })?.id
+                selectedID = items.first(where: {
+                    !$0.isPinnedSystemItem && !$0.isOmittedFromSettings && !$0.isUnavailableVisibleSystemItem
+                })?.id
             }
             statusMessage = lastExplicitApplyFailure ?? (hasUnsavedChanges ? L10n.text("status.unsaved")
                 : requiresManualRetry ? L10n.text("status.manualRetry") : nil)

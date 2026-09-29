@@ -80,6 +80,7 @@
 "system.weather" = "Weather";
 "system.screenMirroring" = "Screen Mirroring";
 "system.displays" = "Displays";
+"system.timer" = "Timer";
 "system.nowPlaying" = "Now Playing";
 "system.accessibility" = "Accessibility";
 "system.userSwitcher" = "Fast User Switching";

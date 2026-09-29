@@ -284,6 +284,31 @@ final class ItemRegistryTests: XCTestCase {
         XCTAssertThrowsError(try LayoutEditor.move("system-position:module:Clock", to: .visible, at: 0, in: hidden))
     }
 
+    func testSystemItemsDisabledOutsideTheAppLeaveVisibleListButKeepSavedPositions() throws {
+        let display = DiscoveredItem(bundleID: "com.apple.MenuBarAgent", identifier: nil,
+            name: "Displays", positionTableKey: "module:Displays")
+        let mirroring = DiscoveredItem(bundleID: "com.apple.MenuBarAgent", identifier: nil,
+            name: "Screen Mirroring", positionTableKey: "module:ScreenMirroring")
+        let initial = try ItemRegistry.reconcile([display, mirroring], with: LayoutDocument())
+        let disabled = try ItemRegistry.reconcile([], with: initial.layout)
+        XCTAssertEqual(disabled.layout.entries.map(\.id), initial.layout.entries.map(\.id))
+        XCTAssertTrue(disabled.items.allSatisfy(\.isUnavailableVisibleSystemItem))
+
+        let restored = try ItemRegistry.reconcile([display, mirroring], with: disabled.layout)
+        XCTAssertFalse(restored.items.contains(where: \.isUnavailableVisibleSystemItem))
+        XCTAssertEqual(restored.items.map(\.id), initial.items.map(\.id))
+
+        let hidden = try LayoutEditor.move(initial.items[0].id, to: .hidden, at: 0, in: initial.layout)
+        let hiddenMissing = try ItemRegistry.reconcile([], with: hidden)
+        XCTAssertFalse(try XCTUnwrap(hiddenMissing.items.first { $0.id == initial.items[0].id })
+            .isUnavailableVisibleSystemItem)
+
+        let missingApp = try ItemRegistry.reconcile([], with: LayoutDocument(entries: [
+            LayoutEntry(id: "app:org.example", bundleID: "org.example", name: "Example")
+        ]))
+        XCTAssertFalse(missingApp.items[0].isUnavailableVisibleSystemItem)
+    }
+
     func testHiddenSystemModulesSurviveDelayedRediscoveryWhenHidingAnotherApp() throws {
         let saved = LayoutDocument(entries: [
             LayoutEntry(id: "system-position:module:Bluetooth", bundleID: "com.apple.MenuBarAgent",

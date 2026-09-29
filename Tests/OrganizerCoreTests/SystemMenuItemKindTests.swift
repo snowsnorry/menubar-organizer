@@ -57,6 +57,20 @@ final class SystemMenuItemKindTests: XCTestCase {
             "system-position:module:FocusModes"))
     }
 
+    func testDisplayAndTimerUseDedicatedSymbols() {
+        XCTAssertEqual(SystemMenuItemKind.identify(bundleID: "com.apple.MenuBarAgent", metadata: ["Display"]), .displays)
+        XCTAssertEqual(SystemMenuItemKind.identify(bundleID: "com.apple.MenuBarAgent", metadata: ["Timer"]), .timer)
+        XCTAssertEqual(SystemMenuItemKind.symbol(forPositionID: "system-position:module:Displays"), "display")
+        XCTAssertEqual(SystemMenuItemKind.symbol(forPositionID: "system-position:module:Timer"), "timer")
+    }
+
+    func testKnownDisplayTitlesResolveOnlyWhenUnambiguous() {
+        XCTAssertEqual(SystemMenuItemKind.modulePositionKeyForKnownTitle(metadata: ["Display"]), "module:Displays")
+        XCTAssertEqual(SystemMenuItemKind.modulePositionKeyForKnownTitle(metadata: ["Screen Mirroring"]), "module:ScreenMirroring")
+        XCTAssertNil(SystemMenuItemKind.modulePositionKeyForKnownTitle(metadata: ["Display", "Screen Mirroring"]))
+        XCTAssertNil(SystemMenuItemKind.modulePositionKeyForKnownTitle(metadata: ["Unknown Display Control"]))
+    }
+
     func testPinnedControlCenterRequiresChildEvidence() {
         XCTAssertTrue(SystemMenuItemKind.isControlCenterStatusItem(metadata: ["com.apple.controlcenter", "Пункт управления"]))
         XCTAssertTrue(SystemMenuItemKind.isControlCenterStatusItem(metadata: ["com.apple.controlcenter.BentoBox"]))

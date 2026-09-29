@@ -44,6 +44,12 @@ public struct RegistryItem: Identifiable, Equatable, Sendable {
     public var isPinnedSystemItem: Bool {
         ItemRegistry.isPinnedSystemPosition(entry) || isPinnedByDiscovery
     }
+    /// A saved system position can outlive the menu bar item after macOS turns
+    /// that item off. Keep the layout entry, but omit its unavailable visible row.
+    public var isUnavailableVisibleSystemItem: Bool {
+        entry.group == .visible && availability == .absent &&
+            entry.bundleID.hasPrefix("com.apple.") && entry.id.hasPrefix("system-position:")
+    }
     /// Unsupported is a display section, never a persisted visibility group.
     public var isUnsupportedInSettings: Bool {
         return availability == .unsupported || availability == .ambiguous ||

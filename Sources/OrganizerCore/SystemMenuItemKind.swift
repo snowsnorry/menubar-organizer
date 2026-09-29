@@ -4,7 +4,7 @@ import Foundation
 public enum SystemMenuItemKind: String, CaseIterable, Sendable {
     case timeMachine, inputSource, clock, controlCenter, battery, wifi, bluetooth
     case sound, focus, spotlight, siri, weather, screenMirroring, displays
-    case nowPlaying, accessibility, userSwitcher, keyboardBrightness, vpn
+    case nowPlaying, accessibility, userSwitcher, keyboardBrightness, vpn, timer
 
     public var localizationKey: String { "system.\(rawValue)" }
 
@@ -29,6 +29,7 @@ public enum SystemMenuItemKind: String, CaseIterable, Sendable {
         case .userSwitcher: "person.crop.circle"
         case .keyboardBrightness: "keyboard"
         case .vpn: "network"
+        case .timer: "timer"
         }
     }
 
@@ -39,6 +40,8 @@ public enum SystemMenuItemKind: String, CaseIterable, Sendable {
         case "system-position:module:AudioVideoModule": "video.badge.waveform"
         case "system-position:module:AirDrop": "dot.radiowaves.left.and.right"
         case "system-position:module:UserSwitcher": "person.crop.circle"
+        case "system-position:module:Displays": "display"
+        case "system-position:module:Timer": "timer"
         default: nil
         }
     }
@@ -62,6 +65,20 @@ public enum SystemMenuItemKind: String, CaseIterable, Sendable {
             "ScreenMirroring": "module:ScreenMirroring", "BentoBox": "module:BentoBox-0"
         ]
         return Set(metadata.compactMap { modules[$0] })
+    }
+
+    /// Some menu bar buttons expose only their exact localized title through
+    /// AX. Use these names only for known system owners and only when no AX
+    /// identifier already selected a module.
+    public static func modulePositionKeyForKnownTitle(metadata: [String]) -> String? {
+        let titles: [String: String] = [
+            "Display": "module:Displays", "Displays": "module:Displays",
+            "Дисплей": "module:Displays", "Дисплеи": "module:Displays",
+            "Screen Mirroring": "module:ScreenMirroring",
+            "Повтор экрана": "module:ScreenMirroring"
+        ]
+        let matches = Set(metadata.compactMap { titles[$0] })
+        return matches.count == 1 ? matches.first : nil
     }
 
     /// A SystemUIServer process may host several legacy extras. Match each
@@ -136,6 +153,7 @@ public enum SystemMenuItemKind: String, CaseIterable, Sendable {
             (.inputSource, ["inputsource", "inputmenu", "textinput", "сменаязыка", "источникиввода"]),
             (.controlCenter, ["bentobox", "primarybento", "пунктуправления"]),
             (.screenMirroring, ["screenmirroring", "повторэкрана"]),
+            (.timer, ["timer", "таймер"]),
             (.keyboardBrightness, ["keyboardbrightness", "яркостьклавиатуры"]),
             (.vpn, ["vpn", "comapplemenuextravpn"]),
             (.nowPlaying, ["nowplaying", "исполняется"]),
@@ -146,7 +164,7 @@ public enum SystemMenuItemKind: String, CaseIterable, Sendable {
             (.focus, ["focus", "donotdisturb", "фокусирование"]),
             (.spotlight, ["spotlight"]), (.siri, ["siri"]),
             (.weather, ["weather", "погода"]), (.clock, ["clock", "часы"]),
-            (.displays, ["displays", "дисплеи"])
+            (.displays, ["display", "дисплей", "дисплеи"])
         ]
         // Per-icon metadata takes priority over the shared host bundle name.
         for value in values {

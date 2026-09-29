@@ -6,7 +6,8 @@ struct SettingsView: View {
     @Bindable var model: SettingsModel
 
     private var selected: RegistryItem? { model.items.first {
-        $0.id == model.selectedID && !$0.isPinnedSystemItem && !$0.isOmittedFromSettings
+        $0.id == model.selectedID && !$0.isPinnedSystemItem && !$0.isOmittedFromSettings &&
+            !$0.isUnavailableVisibleSystemItem
     } }
 
     var body: some View {
@@ -233,12 +234,13 @@ struct SettingsView: View {
     }
 
     private var unsupportedItems: [RegistryItem] {
-        model.items.filter { $0.isUnsupportedInSettings && !$0.isPinnedSystemItem && !$0.isOmittedFromSettings }
+        model.items.filter { $0.isUnsupportedInSettings && !$0.isPinnedSystemItem &&
+            !$0.isOmittedFromSettings && !$0.isUnavailableVisibleSystemItem }
     }
 
     private func items(in group: ItemGroup) -> [RegistryItem] {
         model.items.filter { $0.entry.group == group && !$0.isUnsupportedInSettings &&
-            !$0.isPinnedSystemItem && !$0.isOmittedFromSettings }
+            !$0.isPinnedSystemItem && !$0.isOmittedFromSettings && !$0.isUnavailableVisibleSystemItem }
     }
 
     private func canReorder(_ item: RegistryItem) -> Bool {

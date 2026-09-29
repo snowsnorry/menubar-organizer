@@ -80,6 +80,7 @@
 "system.weather" = "Погода";
 "system.screenMirroring" = "Повтор экрана";
 "system.displays" = "Дисплеи";
+"system.timer" = "Таймер";
 "system.nowPlaying" = "Исполняется";
 "system.accessibility" = "Универсальный доступ";
 "system.userSwitcher" = "Смена пользователя";
