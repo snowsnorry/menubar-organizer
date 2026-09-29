@@ -61,13 +61,15 @@ public actor LayoutCoordinator {
         if generation == token { tail = nil }
     }
 
-    public func apply(_ document: LayoutDocument, revealed: Bool = false, allowReordering: Bool = true) async -> LayoutApplyReport {
+    public func apply(_ document: LayoutDocument, revealed: Bool = false, allowReordering: Bool = true,
+                      currentVisibilityLayout: LayoutDocument? = nil) async -> LayoutApplyReport {
         generation &+= 1
         let token = generation
         let previous = tail
         let task = Task {
             if let previous { _ = await previous.value }
-            return await self.perform(document, revealed: revealed, allowReordering: allowReordering, token: token)
+            return await self.perform(document, revealed: revealed, allowReordering: allowReordering,
+                                      currentVisibilityLayout: currentVisibilityLayout, token: token)
         }
         tail = task
         let result = await task.value
@@ -132,7 +134,8 @@ public actor LayoutCoordinator {
         }
     }
 
-    private func perform(_ document: LayoutDocument, revealed: Bool, allowReordering: Bool, token: UInt64) async -> LayoutApplyReport {
+    private func perform(_ document: LayoutDocument, revealed: Bool, allowReordering: Bool,
+                         currentVisibilityLayout: LayoutDocument?, token: UInt64) async -> LayoutApplyReport {
         var report = LayoutApplyReport(status: .superseded, visibilityApplied: false, snapshot: nil,
                                        observedOrder: [], movedCount: 0, deferredIDs: [], error: nil,
                                        fallbackError: nil, unverifiedSystemTargets: [])
@@ -140,6 +143,26 @@ public actor LayoutCoordinator {
         do {
             let document = try document.validated()
             var hidden: Set<String> = []
+            if !revealed, !allowReordering, let currentVisibilityLayout,
+               await backend.hasActiveVisibilityRestriction() {
+                do {
+                    let observations = try await backend.discover()
+                    guard token == generation else { return report }
+                    let snapshot = try ItemRegistry.reconcile(observations, with: document)
+                    if VisibilityRefreshPolicy.canKeepCurrentAssertion(applied: currentVisibilityLayout,
+                                                                       current: document, snapshot: snapshot) {
+                        report.snapshot = snapshot
+                        report.observedOrder = observedIDs(observations)
+                        report.visibilityApplied = true
+                        report.status = .applied
+                        return report
+                    }
+                } catch {
+                    // A read-only check cannot invalidate the existing filter.
+                    report.visibilityApplied = true
+                    throw error
+                }
+            }
             // Eligibility needs a pre-change inventory only when this request
             // could hide an application. Revealing everything can be followed
             // by a single discovery of the resulting state.

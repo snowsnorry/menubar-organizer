@@ -30,4 +30,14 @@ final class VisibilityRefreshPolicyTests: XCTestCase {
         let snapshot = try ItemRegistry.reconcile([observation], with: layout)
         XCTAssertTrue(VisibilityRefreshPolicy.canKeepCurrentAssertion(applied: layout, current: layout, snapshot: snapshot))
     }
+
+    func testSystemModuleAccessibilityRowDoesNotForceFullCheck() throws {
+        let entry = LayoutEntry(id: "system-position:module:Bluetooth", bundleID: "com.apple.controlcenter",
+                                name: "Bluetooth", group: .hidden)
+        let layout = LayoutDocument(entries: [entry])
+        let observation = DiscoveredItem(bundleID: entry.bundleID, identifier: nil, name: entry.name,
+                                         positionTableKey: "module:Bluetooth")
+        let snapshot = try ItemRegistry.reconcile([observation], with: layout)
+        XCTAssertTrue(VisibilityRefreshPolicy.canKeepCurrentAssertion(applied: layout, current: layout, snapshot: snapshot))
+    }
 }

@@ -48,6 +48,7 @@ final class VisibilityDriver {
     private var requestID: UUID?
     private var observers: [NSObjectProtocol] = []
     private var sessionBundles: Set<String> = []
+    private var launchInvalidationTask: Task<Void, Never>?
 
     init() {
         let observer = NSWorkspace.shared.notificationCenter.addObserver(
@@ -57,9 +58,14 @@ final class VisibilityDriver {
             MainActor.assumeIsolated {
                 guard let self, self.session != nil else { return }
                 guard let launched, self.sessionBundles.contains(launched) else {
-                    Logger(subsystem: "local.menubarorganizer.app", category: "visibility")
-                        .notice("Visibility filter released for newly launched application")
-                    self.invalidate(reason: .inventoryChanged)
+                    self.launchInvalidationTask?.cancel()
+                    self.launchInvalidationTask = Task { [weak self] in
+                        do { try await Task.sleep(for: .milliseconds(350)) } catch { return }
+                        guard let self, !Task.isCancelled, self.session != nil else { return }
+                        Logger(subsystem: "local.menubarorganizer.app", category: "visibility")
+                            .notice("Visibility filter released after application launch burst")
+                        self.invalidate(reason: .inventoryChanged)
+                    }
                     return
                 }
             }
@@ -73,11 +79,8 @@ final class VisibilityDriver {
     }
 
     func setHiddenApplications(_ targets: Set<String>) async throws {
-        // Always release the previous global restriction before validating a new
-        // configuration. Any failure therefore leaves no assertion owned here.
-        invalidate(reason: nil)
         try Task.checkCancellation()
-        guard !targets.isEmpty else { return }
+        guard !targets.isEmpty else { invalidate(reason: nil); return }
         let loaded = try runtime ?? Runtime.load()
         runtime = loaded
         let ownBundle = Bundle.main.bundleIdentifier
@@ -115,6 +118,10 @@ final class VisibilityDriver {
         for target in bundles where !knownBundles.contains(target) { throw DriverError.targetNotRunning(target) }
         let created = try loaded.makeSession(allowedBundles: knownBundles.union([ownBundle])
             .subtracting(bundles).sorted(), hiddenSystemItems: systemIDs)
+        try Task.checkCancellation()
+        // Keep the old assertion if validation or allocation fails. Replacing
+        // it still requires a release because this private API has no update.
+        invalidate(reason: nil)
         sessionBundles = knownBundles.union([ownBundle])
         let id = UUID()
         requestID = id
@@ -166,6 +173,7 @@ final class VisibilityDriver {
     func invalidateForTermination() { invalidate(reason: nil) }
 
     private func invalidate(reason: DriverError?, completionError: (any Error)? = nil) {
+        launchInvalidationTask?.cancel(); launchInvalidationTask = nil
         requestID = nil
         sessionBundles = []
         timeout?.cancel(); timeout = nil

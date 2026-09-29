@@ -20,8 +20,9 @@ public enum VisibilityRefreshPolicy {
             guard item.entry.group == .hidden,
                   item.availability == .available || item.availability == .overflow,
                   item.canSetVisibility else { return false }
-            // This AX row may remain after the Time Machine icon disappears.
-            return ItemRegistry.systemVisibilityTarget(for: item.entry) != "com.apple.systemuiserver"
+            // System AX rows can remain after their icons disappear. Their
+            // presence alone cannot justify replacing an active assertion.
+            return ItemRegistry.systemVisibilityTarget(for: item.entry) == nil
         }
     }
 }

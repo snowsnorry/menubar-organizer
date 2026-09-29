@@ -100,6 +100,52 @@ final class LayoutCoordinatorTests: XCTestCase {
         XCTAssertEqual(visibility, [["org.a"], [], ["org.a"]])
     }
 
+    func testReapplyKeepsVerifiedCurrentFilter() async {
+        let a = item("a")
+        let backend = FakeLayoutBackend([a])
+        await backend.omitHiddenFromDiscovery()
+        let coordinator = LayoutCoordinator(backend: backend)
+        let saved = document([a], hidden: ["a"])
+        _ = await coordinator.apply(saved, allowReordering: false)
+        let second = await coordinator.apply(saved, allowReordering: false,
+                                             currentVisibilityLayout: saved)
+        let requests = await backend.visibilityRequests()
+        XCTAssertEqual(second.status, .applied)
+        XCTAssertTrue(second.visibilityApplied)
+        XCTAssertEqual(requests, [["org.a"]])
+    }
+
+    func testChangedHiddenLayoutStillReplacesCurrentFilter() async {
+        let a = item("a")
+        let b = item("b")
+        let backend = FakeLayoutBackend([a, b])
+        await backend.omitHiddenFromDiscovery()
+        let coordinator = LayoutCoordinator(backend: backend)
+        let old = document([a, b], hidden: ["a"])
+        let changed = document([a, b], hidden: ["a", "b"])
+        _ = await coordinator.apply(old, allowReordering: false)
+        let second = await coordinator.apply(changed, allowReordering: false,
+                                             currentVisibilityLayout: old)
+        let requests = await backend.visibilityRequests()
+        XCTAssertEqual(second.status, .applied)
+        XCTAssertEqual(requests, [["org.a"], [], ["org.a", "org.b"]])
+    }
+
+    func testReapplyKeepsFilterWhenSystemAXRowRemains() async throws {
+        let bluetooth = DiscoveredItem(bundleID: "com.apple.controlcenter", identifier: nil,
+            name: "Bluetooth", positionTableKey: "module:Bluetooth")
+        let backend = FakeLayoutBackend([bluetooth])
+        let coordinator = LayoutCoordinator(backend: backend)
+        let initial = try ItemRegistry.reconcile([bluetooth], with: LayoutDocument())
+        let hidden = try LayoutEditor.move(initial.items[0].id, to: .hidden, at: 0, in: initial.layout)
+        _ = await coordinator.apply(hidden, allowReordering: false)
+        let second = await coordinator.apply(hidden, allowReordering: false,
+                                             currentVisibilityLayout: hidden)
+        let requests = await backend.visibilityRequests()
+        XCTAssertEqual(second.status, .applied)
+        XCTAssertEqual(requests, [["system-item:1"]])
+    }
+
     func testSystemAXRowDoesNotReplaceAcceptedVisibilityFilter() async throws {
         let bluetooth = DiscoveredItem(bundleID: "com.apple.controlcenter", identifier: nil,
             name: "Bluetooth", positionTableKey: "module:Bluetooth")

@@ -650,7 +650,8 @@ final class SettingsModel {
                 ? await coordinator.restoreSavedLayout(requested)
                 : await coordinator.apply(requested,
                     revealed: !explicit && reveal.state != .collapsed,
-                    allowReordering: allowReordering)
+                    allowReordering: allowReordering,
+                    currentVisibilityLayout: backend.hasCurrentHiddenAssertion() ? lastAppliedHiddenLayout : nil)
             guard token == revision, !stopped else { return }
             if let snapshot = report.snapshot {
                 items = snapshot.items

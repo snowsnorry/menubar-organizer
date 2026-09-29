@@ -132,8 +132,10 @@ final class NativeBackend: LayoutBackend {
                     self.recentlyRevealedFingerprint = []
                 }
             } catch {
-                self.invalidateInventory(); self.hiddenApplications = []; self.hiddenFingerprint = []
-                self.recentlyRevealedApplications = nil; self.recentlyRevealedFingerprint = []
+                if !self.visibility.isActive {
+                    self.invalidateInventory(); self.hiddenApplications = []; self.hiddenFingerprint = []
+                    self.recentlyRevealedApplications = nil; self.recentlyRevealedFingerprint = []
+                }
                 throw error
             }
         }
