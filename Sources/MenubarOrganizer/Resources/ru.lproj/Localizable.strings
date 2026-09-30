@@ -103,3 +103,7 @@
 "positionAccess.message" = "Выберите com.apple.MenuBar.plist, чтобы Menubar Organizer менял порядок иконок без перемещения курсора.";
 "positionAccess.choose" = "Разрешить";
 "status.positionAccessRequired" = "Выберите файл расположения меню-бара, чтобы применить этот порядок.";
+
+"status.legacyExtrasVisible" = "Не удалось скрыть VPN или Time Machine: они оставлены видимыми. Остальные значки управляются как обычно.";
+
+"status.legacyExtrasRecoveryFailed" = "Не удалось подтвердить восстановление VPN или Time Machine. Повторите раскрытие значков; остальные значки управляются как обычно.";

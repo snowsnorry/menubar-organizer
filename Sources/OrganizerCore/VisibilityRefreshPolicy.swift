@@ -6,7 +6,8 @@ public enum VisibilityRefreshPolicy {
     /// present. The caller separately verifies that the assertion and process
     /// inventory are still current.
     public static func canKeepCurrentAssertion(applied: LayoutDocument, current: LayoutDocument,
-                                               snapshot: RegistrySnapshot) -> Bool {
+                                               snapshot: RegistrySnapshot,
+                                               failedSystemTargets: Set<String> = []) -> Bool {
         struct HiddenIdentity: Hashable {
             let id: String
             let bundleID: String
@@ -22,7 +23,14 @@ public enum VisibilityRefreshPolicy {
                   item.canSetVisibility else { return false }
             // System AX rows can remain after their icons disappear. Their
             // presence alone cannot justify replacing an active assertion.
-            return ItemRegistry.systemVisibilityTarget(for: item.entry) == nil
+            let target = ItemRegistry.systemVisibilityTarget(for: item.entry)
+            // An explicitly failed legacy target stays visible until the next
+            // user reveal/collapse; passive refresh must preserve other hiding.
+            if let target, target.hasPrefix(ItemRegistry.legacyExtraTargetPrefix),
+               failedSystemTargets.contains(target) { return false }
+            // Legacy removal must remove the exact AX row. A reappearing extra
+            // requires a fresh inventory and backend operation.
+            return target == nil || target?.hasPrefix(ItemRegistry.legacyExtraTargetPrefix) == true
         }
     }
 }

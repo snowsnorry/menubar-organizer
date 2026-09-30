@@ -18,6 +18,9 @@ private actor FakeLayoutBackend: LayoutBackend {
     var omitHidden = false
     var omitHiddenAfterDiscovery: Int?
     var currentHidden: Set<String> = []
+    var warnings: [VisibilityWarning] = []
+    func configureWarnings(_ warnings: [VisibilityWarning]) { self.warnings = warnings }
+    func visibilityWarnings() -> [VisibilityWarning] { warnings.filter { currentHidden.contains($0.target) } }
 
     init(_ items: [DiscoveredItem]) { self.items = items }
     func configure(ignoreMoves: Bool = false, failVisibility: Bool = false, block: Bool = false, failMoveAt: Int? = nil) {
@@ -84,6 +87,38 @@ final class LayoutCoordinatorTests: XCTestCase {
                         bundleID: $0.bundleID!, name: $0.name,
                         group: hidden.contains($0.name) ? .hidden : .visible)
         })
+    }
+
+    func testLegacyWarningDoesNotRevealOtherAppsOrRetryOnPassiveRefresh() async throws {
+        let app = item("a")
+        let vpn = DiscoveredItem(bundleID: "com.apple.systemuiserver", identifier: nil, name: "VPN",
+            positionTableKey: "status:com.apple.systemuiserver::com.apple.menuextra.vpn")
+        let initial = try ItemRegistry.reconcile([app, vpn], with: LayoutDocument())
+        let appHidden = try LayoutEditor.move(ItemRegistry.observationID(app)!, to: .hidden, at: 0, in: initial.layout)
+        let saved = try LayoutEditor.move(ItemRegistry.vpnPositionID, to: .hidden, at: 1, in: appHidden)
+        let backend = FakeLayoutBackend([app, vpn])
+        await backend.omitHiddenFromDiscovery()
+        let warning = VisibilityWarning(target: "legacy-extra:com.apple.menuextra.vpn", reason: "legacyExtraVerificationFailed")
+        await backend.configureWarnings([warning])
+        let coordinator = LayoutCoordinator(backend: backend)
+        let first = await coordinator.apply(saved, allowReordering: false)
+        XCTAssertEqual(first.status, .applied)
+        XCTAssertTrue(first.visibilityApplied)
+        XCTAssertNil(first.error)
+        XCTAssertEqual(first.visibilityWarnings, [warning])
+        XCTAssertTrue(first.unverifiedSystemTargets.isEmpty)
+        let refresh = await coordinator.apply(saved, allowReordering: false, currentVisibilityLayout: saved)
+        XCTAssertEqual(refresh.visibilityWarnings, [warning])
+        let beforeReveal = await backend.visibilityRequests()
+        let targets: Set<String> = ["org.a", warning.target]
+        XCTAssertEqual(beforeReveal, [targets])
+        let reveal = await coordinator.apply(saved, revealed: true, allowReordering: false)
+        XCTAssertTrue(reveal.visibilityWarnings.isEmpty)
+        let collapse = await coordinator.apply(saved, allowReordering: false)
+        XCTAssertEqual(collapse.status, .applied)
+        XCTAssertEqual(collapse.visibilityWarnings, [warning])
+        let afterCollapse = await backend.visibilityRequests()
+        XCTAssertEqual(afterCollapse, [targets, [], targets])
     }
 
     func testReapplyRevealsBeforeDiscoveringHiddenIcon() async {
@@ -373,7 +408,7 @@ final class LayoutCoordinatorTests: XCTestCase {
         XCTAssertEqual(observed, document.entries.map(\.id))
     }
 
-    func testTimeMachineHideUsesSystemUIServerOnlyForExactPositionID() async throws {
+    func testTimeMachineHideUsesLegacyBackendOnlyForExactPositionID() async throws {
         let timeMachine = DiscoveredItem(bundleID: "com.apple.systemuiserver", identifier: nil,
             name: "Time Machine", positionTableKey: "status:com.apple.systemuiserver::com.apple.menuextra.TimeMachine")
         let backend = FakeLayoutBackend([timeMachine])
@@ -384,7 +419,7 @@ final class LayoutCoordinatorTests: XCTestCase {
         XCTAssertEqual(report.status, .applied)
         XCTAssertTrue(report.visibilityApplied)
         let requests = await backend.visibilityRequests()
-        XCTAssertEqual(requests, [["com.apple.systemuiserver"]])
+        XCTAssertEqual(requests, [["legacy-extra:com.apple.menuextra.TimeMachine"]])
     }
 
     func testDelayedTimeMachineDisappearanceKeepsFilterActive() async throws {
@@ -397,7 +432,7 @@ final class LayoutCoordinatorTests: XCTestCase {
         let report = await LayoutCoordinator(backend: backend).apply(hidden, allowReordering: false)
         XCTAssertEqual(report.status, .applied)
         let requests = await backend.visibilityRequests()
-        XCTAssertEqual(requests, [["com.apple.systemuiserver"]])
+        XCTAssertEqual(requests, [["legacy-extra:com.apple.menuextra.TimeMachine"]])
     }
 
     func testStaleTimeMachineAXRowDoesNotRevealOtherHiddenApplications() async throws {
@@ -414,7 +449,7 @@ final class LayoutCoordinatorTests: XCTestCase {
         XCTAssertEqual(report.status, .applied)
         XCTAssertTrue(report.visibilityApplied)
         let requests = await backend.visibilityRequests()
-        XCTAssertEqual(requests, [["com.apple.systemuiserver", "org.grammarly"]])
+        XCTAssertEqual(requests, [["legacy-extra:com.apple.menuextra.TimeMachine", "org.grammarly"]])
     }
 
     func testReadOnlySystemUIServerSiblingsDoNotCancelTimeMachineFilter() async throws {
@@ -433,7 +468,7 @@ final class LayoutCoordinatorTests: XCTestCase {
         let report = await LayoutCoordinator(backend: backend).apply(hidden, allowReordering: false)
         XCTAssertEqual(report.status, .applied)
         let requests = await backend.visibilityRequests()
-        XCTAssertEqual(requests, [["com.apple.systemuiserver"]])
+        XCTAssertEqual(requests, [["legacy-extra:com.apple.menuextra.TimeMachine"]])
     }
 
     func testUnknownOwnerAfterVisibilityKeepsRequestedItemsHidden() async {

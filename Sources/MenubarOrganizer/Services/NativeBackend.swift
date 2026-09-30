@@ -8,6 +8,7 @@ final class NativeBackend: LayoutBackend {
     private let positionStore = MenuBarPositionStore()
     private var tail: Task<Void, Error>?
     private var stopped = false
+    private var needsLaunchRecovery = true
     private var gestureGeneration: UInt64 = 0
     private var explicitReorderingGeneration: UInt64?
     private var cachedInventory: [NativeItem]?
@@ -45,16 +46,17 @@ final class NativeBackend: LayoutBackend {
             if !refresh, cacheTime.duration(to: .now) <= .seconds(2) { return cachedInventory }
             let updated: [NativeItem]
             do {
-                updated = try await NativeDiscovery.refresh(items: cachedInventory, validateMembership: true)
+                updated = try await NativeDiscovery.refresh(items: cachedInventory, validateMembership: true,
+                    removedLegacyExtraIDs: visibility.discoveryRemovedLegacyExtraIDs)
             } catch NativeDiscoveryError.staleGeometry {
                 invalidateInventory()
-                updated = try await NativeDiscovery.scan()
+                updated = try await NativeDiscovery.scan(removedLegacyExtraIDs: visibility.discoveryRemovedLegacyExtraIDs)
             }
             guard currentFingerprint == fingerprint else { invalidateInventory(); throw MoveError.expired }
             remember(updated)
             return updated
         }
-        let updated = try await NativeDiscovery.scan()
+        let updated = try await NativeDiscovery.scan(removedLegacyExtraIDs: visibility.discoveryRemovedLegacyExtraIDs)
         guard currentFingerprint == fingerprint else { invalidateInventory(); throw MoveError.expired }
         remember(updated)
         return updated
@@ -83,11 +85,18 @@ final class NativeBackend: LayoutBackend {
         cancelGestures()
         if let tail { _ = try? await tail.value }
         positionStore.closeAccess()
+        try? await visibility.revealAll()
         visibility.invalidateForTermination()
     }
 
     func discover() async throws -> [DiscoveredItem] {
         if let tail { _ = try? await tail.value }
+        if needsLaunchRecovery {
+            // Restore journaled legacy removals before reconciling the saved
+            // layout with an inventory that would otherwise omit those items.
+            try await visibility.recoverLegacyExtras()
+            needsLaunchRecovery = false
+        }
         var observed = try await inventory(refresh: false).map(\.item)
         let missing = unsupportedModules.missingKeys(observed: observed)
         for key in missing {
@@ -101,8 +110,7 @@ final class NativeBackend: LayoutBackend {
                 isSupported: false, positionTableKey: key))
         }
         for (key, bundle, name) in [
-            ("module:FocusModes", "com.apple.MenuBarAgent", "system.focus"),
-            ("status:com.apple.systemuiserver::com.apple.menuextra.vpn", "com.apple.systemuiserver", "system.vpn")
+            ("module:FocusModes", "com.apple.MenuBarAgent", "system.focus")
         ] where !observed.contains(where: { $0.positionTableKey == key }) {
             observed.append(DiscoveredItem(bundleID: bundle, identifier: nil,
                 name: L10n.text(name), isDirectlyAccessible: false,
@@ -119,6 +127,8 @@ final class NativeBackend: LayoutBackend {
         }
         return observed
     }
+
+    func visibilityWarnings() async -> [VisibilityWarning] { visibility.legacyWarnings }
 
     func hasActiveVisibilityRestriction() async -> Bool { visibility.isActive }
 

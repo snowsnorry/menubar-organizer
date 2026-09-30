@@ -111,7 +111,16 @@ public enum SystemMenuItemKind: String, CaseIterable, Sendable {
     /// leaves exactly one configured extra and exactly one empty AX child.
     /// A changing generic title such as "System Menu" is never an identity.
     public static func legacyPositionKeys(metadataByChild: [[String]],
-                                          configuredExtras: [String]) -> [String?] {
+                                          configuredExtras: [String],
+                                          removedExtraIDs: Set<String> = []) -> [String?] {
+        // Preferences can retain an extra while CoreMenuExtra has unloaded it.
+        // Only the owning backend supplies this transient removal evidence.
+        let bundleIDs = ["TimeMachine.menu": "com.apple.menuextra.TimeMachine",
+                         "VPN.menu": "com.apple.menuextra.vpn"]
+        let configuredExtras = configuredExtras.filter { path in
+            guard let id = bundleIDs[URL(fileURLWithPath: path).lastPathComponent] else { return true }
+            return !removedExtraIDs.contains(id)
+        }
         var keys = metadataByChild.map {
             legacyPositionKey(metadata: $0, configuredExtras: configuredExtras)
         }

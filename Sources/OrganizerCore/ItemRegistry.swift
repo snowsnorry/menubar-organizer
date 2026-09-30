@@ -85,12 +85,14 @@ public struct RegistrySnapshot: Equatable, Sendable {
 public enum ItemRegistry {
     public static let organizerBundleID = "local.menubarorganizer.app"
     public static let timeMachinePositionID = "system-position:status:com.apple.systemuiserver::com.apple.menuextra.TimeMachine"
+    public static let vpnPositionID = "system-position:status:com.apple.systemuiserver::com.apple.menuextra.vpn"
+    public static let legacyExtraTargetPrefix = "legacy-extra:"
+    public static let legacyExtraBundleIDs: Set<String> = ["com.apple.menuextra.vpn", "com.apple.menuextra.TimeMachine"]
     public static let unsupportedSystemPositionIDs: Set<String> = [
         "system-position:module:FocusModes",
         "system-position:module:AudioVideoModule",
         "system-position:module:AirDrop",
-        "system-position:module:UserSwitcher",
-        "system-position:status:com.apple.systemuiserver::com.apple.menuextra.vpn"
+        "system-position:module:UserSwitcher"
     ]
 
     public static func isPinnedSystemPosition(_ entry: LayoutEntry) -> Bool {
@@ -109,8 +111,10 @@ public enum ItemRegistry {
     /// system icon. The owner bundle is checked as well as the position key.
     public static func systemVisibilityTarget(for entry: LayoutEntry) -> String? {
         if isPinnedSystemPosition(entry) { return nil }
-        if entry.bundleID == "com.apple.systemuiserver", entry.id == timeMachinePositionID {
-            return "com.apple.systemuiserver"
+        if entry.bundleID == "com.apple.systemuiserver" {
+            return legacyExtraBundleIDs.first {
+                entry.id == "system-position:status:com.apple.systemuiserver::\($0)"
+            }.map { legacyExtraTargetPrefix + $0 }
         }
         if entry.bundleID == "com.apple.controlcenter" || entry.bundleID == "com.apple.MenuBarAgent" {
             guard entry.id.hasPrefix("system-position:") else { return nil }
@@ -135,7 +139,7 @@ public enum ItemRegistry {
         }
         func mustRemainVisible(_ entry: LayoutEntry) -> Bool {
             entry.bundleID == organizerBundleID || isPinnedSystemPosition(entry) ||
-                (entry.bundleID == "com.apple.systemuiserver" && entry.id != timeMachinePositionID) ||
+                (entry.bundleID == "com.apple.systemuiserver" && systemVisibilityTarget(for: entry) == nil) ||
                 unsupportedSystemPositionIDs.contains(entry.id)
         }
         guard result.entries.contains(where: {

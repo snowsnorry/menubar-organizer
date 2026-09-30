@@ -217,7 +217,8 @@ final class SettingsModel {
                 })?.id
             }
             statusMessage = lastExplicitApplyFailure ?? (hasUnsavedChanges ? L10n.text("status.unsaved")
-                : requiresManualRetry ? L10n.text("status.manualRetry") : nil)
+                : requiresManualRetry ? L10n.text("status.manualRetry")
+                : backend.visibility.legacyWarnings.isEmpty ? nil : legacyWarningMessage(backend.visibility.legacyWarnings))
         } catch {
             guard token == revision, !stopped else { return }
             Logger(subsystem: "local.menubarorganizer.app", category: "discovery").error("Discovery failed: \(String(describing: error), privacy: .public)")
@@ -243,7 +244,8 @@ final class SettingsModel {
            let lastAppliedHiddenLayout, let readOnlySnapshot,
            VisibilityRefreshPolicy.canKeepCurrentAssertion(applied: lastAppliedHiddenLayout,
                                                            current: draft.committed,
-                                                           snapshot: readOnlySnapshot) {
+                                                           snapshot: readOnlySnapshot,
+                                                           failedSystemTargets: Set(backend.visibility.legacyWarnings.map(\.target))) {
             pendingRestore = false
             pendingAutomaticRestore = false
             finishAutomaticRecovery()
@@ -670,6 +672,11 @@ final class SettingsModel {
                 Logger(subsystem: "local.menubarorganizer.app", category: "visibility")
                     .notice("System icon AX rows remain after visibility activation; targets=\(targets, privacy: .public)")
             }
+            if !report.visibilityWarnings.isEmpty {
+                let reasons = report.visibilityWarnings.map { $0.target + ":" + $0.reason }.joined(separator: ",")
+                Logger(subsystem: "local.menubarorganizer.app", category: "visibility")
+                    .notice("Legacy visibility warnings; warnings=\(reasons, privacy: .public)")
+            }
             // A failed native move can roll back its position-table write while
             // the proposed order has already been saved. Reconcile only the
             // actually observed, movable visible rows so the list does not
@@ -706,15 +713,20 @@ final class SettingsModel {
                     lastAppliedHiddenLayout = requested
                 }
                 if explicit, report.visibilityApplied,
+                   (report.visibilityWarnings.isEmpty || backend.visibility.isActive),
                    requested.entries.contains(where: { $0.group == .hidden }) {
                     await run(reveal.confirmExplicitHide())
+                }
+                if !report.visibilityWarnings.isEmpty, !backend.visibility.isActive {
+                    reveal.confirmVisibility(.visible)
                 }
                 lastExplicitApplyFailure = nil
                 if !preserveManualRetry {
                     if restoreToken == restoreRevision { pendingRestore = false }
                     requiresManualRetry = false
                     UserDefaults.standard.set(false, forKey: Self.manualRetryKey)
-                    statusMessage = L10n.text("status.applied")
+                    statusMessage = report.visibilityWarnings.isEmpty
+                        ? L10n.text("status.applied") : legacyWarningMessage(report.visibilityWarnings)
                 } else {
                     statusMessage = L10n.text("status.manualRetry")
                 }
@@ -924,6 +936,11 @@ final class SettingsModel {
         }
     }
 
+    private func legacyWarningMessage(_ warnings: [VisibilityWarning]) -> String {
+        L10n.text(warnings.contains { $0.reason == "legacyExtraRecoveryFailed" }
+            ? "status.legacyExtrasRecoveryFailed" : "status.legacyExtrasVisible")
+    }
+
     private func backendErrorMessage(_ error: any Error) -> String {
         if let driverError = error as? VisibilityDriver.DriverError {
             switch driverError {
@@ -1033,7 +1050,10 @@ final class SettingsModel {
                 try await backend.setHiddenApplications(hidden)
                 Logger(subsystem: "local.menubarorganizer.app", category: "visibility").notice("Applied visibility: hidden applications=\(hidden.count), uptime=\(self.now)")
                 guard token == visibilityRevision, !stopped else { return }
-                reveal.confirmVisibility(hidden.isEmpty ? .visible : .hidden)
+                reveal.confirmVisibility(backend.visibility.isActive ? .hidden : .visible)
+                if !backend.visibility.legacyWarnings.isEmpty {
+                    statusMessage = legacyWarningMessage(backend.visibility.legacyWarnings)
+                }
                 if effect == .hideHidden, !hidden.isEmpty {
                     finishAutomaticRecovery()
                     lastAppliedHiddenLayout = draft.committed

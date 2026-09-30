@@ -2,6 +2,7 @@ import AppKit
 import Darwin
 import ObjectiveC
 import OSLog
+import OrganizerCore
 
 /// Bundle-wide private assessment adapter, restricted to the tested OS build.
 /// Successful activation means the service accepted the request, not that every
@@ -36,7 +37,12 @@ final class VisibilityDriver {
         }
     }
 
-    private(set) var isActive = false
+    private var assessmentActive = false
+    private let legacyExtras: SystemUIServerExtras
+    private let assessmentApply: (@MainActor (Set<String>) async throws -> Void)?
+    private(set) var legacyWarnings: [VisibilityWarning] = []
+    var isActive: Bool { assessmentActive || legacyExtras.isActive }
+    var discoveryRemovedLegacyExtraIDs: Set<String> { legacyExtras.discoveryRemovedExtraIDs }
     /// Called when an active or pending request is invalidated by an error or
     /// application inventory change. The model must clear its hidden-state UI.
     var onInvalidated: (@MainActor (DriverError) -> Void)?
@@ -50,7 +56,12 @@ final class VisibilityDriver {
     private var sessionBundles: Set<String> = []
     private var launchInvalidationTask: Task<Void, Never>?
 
-    init() {
+    init(legacyExtras: SystemUIServerExtras = SystemUIServerExtras(),
+         assessmentApply: (@MainActor (Set<String>) async throws -> Void)? = nil,
+         observeApplications: Bool = true) {
+        self.legacyExtras = legacyExtras
+        self.assessmentApply = assessmentApply
+        guard observeApplications else { return }
         let observer = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main
         ) { [weak self] notification in
@@ -75,11 +86,48 @@ final class VisibilityDriver {
 
     isolated deinit {
         invalidate(reason: nil)
+        legacyExtras.restoreBestEffort()
         for observer in observers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
     }
 
     func setHiddenApplications(_ targets: Set<String>) async throws {
+        let legacy = Set(targets.filter { $0.hasPrefix(ItemRegistry.legacyExtraTargetPrefix) })
+        let ids = Set(legacy.map { String($0.dropFirst(ItemRegistry.legacyExtraTargetPrefix.count)) })
+        guard ids.isSubset(of: ItemRegistry.legacyExtraBundleIDs) else {
+            throw DriverError.invalidTarget(legacy.sorted().first ?? "legacy-extra")
+        }
+        if assessmentApply == nil, !legacy.isEmpty, NSWorkspace.shared.runningApplications.contains(where: {
+            !$0.isTerminated && Self.isCompetingManager(($0.bundleIdentifier ?? "") + " " + ($0.localizedName ?? ""))
+        }) { throw DriverError.competingManager }
+        // Only assessment failures propagate to the general visibility policy.
+        // Its validated filter survives any subsequent legacy extra failure.
+        try await setAssessmentHiddenApplications(targets.subtracting(legacy))
+        legacyWarnings = []
+        do {
+            try await legacyExtras.setHidden(ids)
+        } catch {
+            if error is CancellationError { throw error }
+            let affected = ids.union(legacyExtras.removed)
+            let reason = legacyExtras.removed.isEmpty
+                ? (error as? SystemUIServerExtras.Failure)?.diagnosticCode ?? "legacyExtraInventoryFailed"
+                : "legacyExtraRecoveryFailed"
+            legacyWarnings = affected.sorted().map {
+                VisibilityWarning(target: ItemRegistry.legacyExtraTargetPrefix + $0, reason: reason)
+            }
+            Logger(subsystem: "local.menubarorganizer.app", category: "legacyExtras")
+                .error("Legacy request failed; reason=\(reason, privacy: .public); assessmentPreserved=\(self.assessmentActive, privacy: .public); targets=\(affected.sorted().joined(separator: ","), privacy: .public)")
+            // SystemUIServerExtras has already attempted uncancelled rollback.
+            // Keep any failed restoration receipts available for the next reveal.
+        }
+    }
+
+    private func setAssessmentHiddenApplications(_ targets: Set<String>) async throws {
         try Task.checkCancellation()
+        if let assessmentApply {
+            try await assessmentApply(targets)
+            assessmentActive = !targets.isEmpty
+            return
+        }
         guard !targets.isEmpty else { invalidate(reason: nil); return }
         let loaded = try runtime ?? Runtime.load()
         runtime = loaded
@@ -90,8 +138,7 @@ final class VisibilityDriver {
         })
         let bundles = Set(targets.filter { !$0.hasPrefix("system-item:") })
         let permittedAppleOwners: Set<String> = [
-            "com.apple.TextInputMenuAgent", "com.apple.weather.menu", "com.apple.campo",
-            "com.apple.systemuiserver"
+            "com.apple.TextInputMenuAgent", "com.apple.weather.menu", "com.apple.campo"
         ]
         for target in targets where target.hasPrefix("system-item:") {
             guard let id = Int(target.dropFirst("system-item:".count)), (0...8).contains(id) else {
@@ -148,7 +195,7 @@ final class VisibilityDriver {
                         Task { @MainActor [weak self] in
                             guard let self, self.requestID == id else { created?.invalidate(); return }
                             self.timeout?.cancel(); self.timeout = nil
-                            self.isActive = true
+                            self.assessmentActive = true
                             let continuation = self.pending; self.pending = nil
                             continuation?.resume()
                         }
@@ -166,11 +213,14 @@ final class VisibilityDriver {
 
     /// Invalidates only the assertion owned by this driver. No callback exists
     /// for invalidate: return is not an independent guarantee of visual recovery.
-    func revealAll() async throws { invalidate(reason: nil) }
+    /// Launch must not reconcile a partial inventory after failed recovery.
+    func recoverLegacyExtras() async throws { try await legacyExtras.restoreAll() }
+
+    func revealAll() async throws { try await setHiddenApplications([]) }
 
     /// AppDelegate must invoke this from applicationWillTerminate even if the
     /// settings window is closed. SIGKILL cannot execute app-level cleanup.
-    func invalidateForTermination() { invalidate(reason: nil) }
+    func invalidateForTermination() { invalidate(reason: nil); legacyExtras.restoreBestEffort() }
 
     private func invalidate(reason: DriverError?, completionError: (any Error)? = nil) {
         launchInvalidationTask?.cancel(); launchInvalidationTask = nil
@@ -178,11 +228,14 @@ final class VisibilityDriver {
         sessionBundles = []
         timeout?.cancel(); timeout = nil
         let old = session; session = nil
-        isActive = false
+        assessmentActive = false
         let continuation = pending; pending = nil
         old?.invalidate()
         continuation?.resume(throwing: completionError ?? reason ?? .superseded)
-        if let reason, old != nil { onInvalidated?(reason) }
+        if let reason {
+            legacyExtras.restoreBestEffort()
+            if old != nil || legacyExtras.isActive { onInvalidated?(reason) }
+        }
     }
 
     private static func isCompetingManager(_ identity: String) -> Bool {

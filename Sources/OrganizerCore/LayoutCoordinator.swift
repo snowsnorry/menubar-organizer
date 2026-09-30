@@ -5,6 +5,7 @@ import Foundation
 public protocol LayoutBackend: Sendable {
     func discover() async throws -> [DiscoveredItem]
     func hasActiveVisibilityRestriction() async -> Bool
+    func visibilityWarnings() async -> [VisibilityWarning]
     func setHiddenApplications(_ bundleIDs: Set<String>) async throws
     func moveItem(id: String, before targetID: String) async throws
     func moveItem(id: String, relativeTo targetID: String, placement: ItemMovePlacement) async throws
@@ -14,10 +15,18 @@ public enum LayoutBackendMoveError: Error { case unsupportedPlacement }
 
 public extension LayoutBackend {
     func hasActiveVisibilityRestriction() async -> Bool { false }
+    func visibilityWarnings() async -> [VisibilityWarning] { [] }
     func moveItem(id: String, relativeTo targetID: String, placement: ItemMovePlacement) async throws {
         guard placement == .before else { throw LayoutBackendMoveError.unsupportedPlacement }
         try await moveItem(id: id, before: targetID)
     }
+}
+
+/// A target-local failure that leaves unrelated visibility restrictions usable.
+public struct VisibilityWarning: Equatable, Sendable {
+    public var target: String
+    public var reason: String
+    public init(target: String, reason: String) { self.target = target; self.reason = reason }
 }
 
 public enum LayoutApplyStatus: Equatable, Sendable {
@@ -38,6 +47,7 @@ public struct LayoutApplyReport: Sendable {
     public var fallbackError: String?
     /// AX can retain a system row after its icon has disappeared. Diagnostic only.
     public var unverifiedSystemTargets: [String]
+    public var visibilityWarnings: [VisibilityWarning] = []
 }
 
 /// Explicit apply requests only. Passive discovery must not invoke this actor.
@@ -122,8 +132,7 @@ public actor LayoutCoordinator {
                 guard item.availability != .absent, !item.canSetVisibility else { return nil }
                 if item.entry.bundleID.hasPrefix("com.apple.") {
                     // An unrelated read-only sibling has no filter target of
-                    // its own. In particular, Siri and VPN must not revoke
-                    // Time Machine's explicitly selected SystemUIServer filter.
+                    // its own and cannot revoke another extra's target.
                     return ItemRegistry.systemVisibilityTarget(for: item.entry)
                 }
                 return item.entry.bundleID
@@ -156,8 +165,11 @@ public actor LayoutCoordinator {
                     let observations = try await backend.discover()
                     guard token == generation else { return report }
                     let snapshot = try ItemRegistry.reconcile(observations, with: document)
+                    let warnings = await backend.visibilityWarnings()
                     if VisibilityRefreshPolicy.canKeepCurrentAssertion(applied: currentVisibilityLayout,
-                                                                       current: document, snapshot: snapshot) {
+                                                                       current: document, snapshot: snapshot,
+                                                                       failedSystemTargets: Set(warnings.map(\.target))) {
+                        report.visibilityWarnings = warnings
                         report.snapshot = snapshot
                         report.observedOrder = observedIDs(observations)
                         report.visibilityApplied = true
@@ -189,6 +201,7 @@ public actor LayoutCoordinator {
                 hidden = ItemRegistry.eligibleHiddenApplications(in: beforeSnapshot)
             }
             try await backend.setHiddenApplications(hidden)
+            report.visibilityWarnings = await backend.visibilityWarnings()
             guard token == generation else { return report }
             var observations = try await backend.discover()
             guard token == generation else { return report }
@@ -199,10 +212,8 @@ public actor LayoutCoordinator {
                 Set(snapshot.items.compactMap { item -> String? in
                     guard item.availability == .available,
                           let target = ItemRegistry.systemVisibilityTarget(for: item.entry),
-                          // The process-wide Time Machine filter is known to
-                          // leave an AX row after its icon disappears.
-                          target != "com.apple.systemuiserver",
-                          hidden.contains(target) else { return nil }
+                          hidden.contains(target),
+                          !report.visibilityWarnings.contains(where: { $0.target == target }) else { return nil }
                     return target
                 })
             }

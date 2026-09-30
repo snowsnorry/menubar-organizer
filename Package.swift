@@ -11,6 +11,7 @@ let package = Package(
     targets: [
         .target(name: "OrganizerCore"),
         .executableTarget(name: "MenubarOrganizer", dependencies: ["OrganizerCore"], resources: [.process("Resources")]),
-        .testTarget(name: "OrganizerCoreTests", dependencies: ["OrganizerCore"])
+        .testTarget(name: "OrganizerCoreTests", dependencies: ["OrganizerCore"]),
+        .testTarget(name: "MenubarOrganizerTests", dependencies: ["MenubarOrganizer", "OrganizerCore"])
     ]
 )

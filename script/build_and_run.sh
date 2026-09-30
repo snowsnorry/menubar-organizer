@@ -78,8 +78,11 @@ if [[ -e "$INSTALLED_APP" ]]; then
   fi
 fi
 # Build before stopping an existing app so compiler errors leave it running.
-pkill -TERM -x "$APP_NAME" >/dev/null 2>&1 || true
-for _ in {1..50}; do
+if pgrep -u "$(id -u)" -x "$APP_NAME" >/dev/null 2>&1; then
+  # SIGTERM bypasses applicationShouldTerminate and strands removed menu extras.
+  /usr/bin/osascript -e "tell application id \"$BUNDLE_ID\" to quit"
+fi
+for _ in {1..300}; do
   if ! pgrep -u "$(id -u)" -x "$APP_NAME" >/dev/null 2>&1; then break; fi
   sleep 0.1
 done

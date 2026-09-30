@@ -103,3 +103,7 @@
 "positionAccess.message" = "Select com.apple.MenuBar.plist so Menubar Organizer can change icon positions without moving your pointer.";
 "positionAccess.choose" = "Allow";
 "status.positionAccessRequired" = "Choose the menu bar layout file to apply this order.";
+
+"status.legacyExtrasVisible" = "VPN or Time Machine could not be hidden and remain visible. Other icons continue to work normally.";
+
+"status.legacyExtrasRecoveryFailed" = "VPN or Time Machine restoration could not be verified. Reveal the icons again to retry; other icons continue to work normally.";

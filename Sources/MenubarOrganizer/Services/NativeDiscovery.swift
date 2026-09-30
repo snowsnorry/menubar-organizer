@@ -36,19 +36,41 @@ enum NativeDiscovery {
         let launchDate: Date?
     }
 
-    static func scan() async throws -> [NativeItem] {
+    static func scan(removedLegacyExtraIDs: Set<String> = []) async throws -> [NativeItem] {
+        try await scan(removedLegacyExtraIDs: removedLegacyExtraIDs, systemUIServerOnly: false)
+    }
+
+    /// Fresh owner-only evidence for legacy mutations. Explicit AX absence
+    /// from a responsive owner is distinct from an unavailable AX provider.
+    static func scanSystemUIServer(removedLegacyExtraIDs: Set<String>) async throws -> [NativeItem] {
+        try await scan(removedLegacyExtraIDs: removedLegacyExtraIDs, systemUIServerOnly: true)
+    }
+
+    private static func scan(removedLegacyExtraIDs: Set<String>, systemUIServerOnly: Bool) async throws -> [NativeItem] {
         try Task.checkCancellation()
         guard AXIsProcessTrusted() else { throw NativeDiscoveryError.permissionDenied }
         let targets: [Target] = await MainActor.run {
             NSWorkspace.shared.runningApplications.compactMap { app in
+                guard !systemUIServerOnly || app.bundleIdentifier == "com.apple.systemuiserver" else { return nil }
                 return Target(pid: app.processIdentifier, bundleID: app.bundleIdentifier,
                               name: app.localizedName ?? app.bundleIdentifier ?? "", launchDate: app.launchDate)
             }.sorted { $0.pid < $1.pid }
         }
-        let worker = Task.detached(priority: .utility) { try read(targets) }
+        guard !systemUIServerOnly || targets.count == 1 else { throw NativeDiscoveryError.ambiguousIdentity }
+        let worker = Task.detached(priority: systemUIServerOnly ? .userInitiated : .utility) {
+            try read(targets, removedLegacyExtraIDs: removedLegacyExtraIDs, requireMenuBar: systemUIServerOnly)
+        }
         return try await withTaskCancellationHandler {
             let result = try await worker.value
             try Task.checkCancellation()
+            if systemUIServerOnly {
+                let unchanged = await MainActor.run {
+                    let owners = NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier == "com.apple.systemuiserver" }
+                    return owners.count == 1 && owners[0].processIdentifier == targets[0].pid
+                        && owners[0].launchDate == targets[0].launchDate && !owners[0].isTerminated
+                }
+                guard unchanged else { throw NativeDiscoveryError.staleGeometry }
+            }
             return result
         } onCancel: {
             worker.cancel()
@@ -58,7 +80,8 @@ enum NativeDiscovery {
     /// Refresh only known menu-bar owners. The caller must invalidate its cache
     /// when the process inventory changes; endpoint verification remains mandatory.
     static func refresh(items: [NativeItem], validateMembership: Bool = false,
-                        timeBudget: Duration = .seconds(2), verifyHits: Bool = true) async throws -> [NativeItem] {
+                        timeBudget: Duration = .seconds(2), verifyHits: Bool = true,
+                        removedLegacyExtraIDs: Set<String> = []) async throws -> [NativeItem] {
         let deadline = ContinuousClock.now.advanced(by: timeBudget)
         try Task.checkCancellation()
         guard AXIsProcessTrusted() else { throw NativeDiscoveryError.permissionDenied }
@@ -93,7 +116,8 @@ enum NativeDiscovery {
                    let children = try attribute(unsafeDowncast(raw, to: AXUIElement.self), kAXChildrenAttribute, deadline) as? [AXUIElement],
                    !children.isEmpty { throw NativeDiscoveryError.staleGeometry }
             }
-            return try read(targets, deadline: deadline, cached: items, verifyHits: verifyHits)
+            return try read(targets, deadline: deadline, cached: items, verifyHits: verifyHits,
+                            removedLegacyExtraIDs: removedLegacyExtraIDs)
         }
         return try await withTaskCancellationHandler {
             let result = try await worker.value
@@ -104,17 +128,32 @@ enum NativeDiscovery {
 
     private static func read(_ targets: [Target],
                              deadline: ContinuousClock.Instant = .now.advanced(by: .seconds(20)),
-                             cached: [NativeItem] = [], verifyHits: Bool = true) throws -> [NativeItem] {
+                             cached: [NativeItem] = [], verifyHits: Bool = true,
+                             removedLegacyExtraIDs: Set<String> = [], requireMenuBar: Bool = false) throws -> [NativeItem] {
         let displays = try topology()
         guard targets.count <= 512 else { throw NativeDiscoveryError.inventoryLimitExceeded }
         var inventory: [NativeItem] = []
         for target in targets {
             try checkpoint(deadline)
             let root = AXUIElementCreateApplication(target.pid)
-            guard let raw = try attribute(root, kAXExtrasMenuBarAttribute, deadline),
-                  CFGetTypeID(raw) == AXUIElementGetTypeID() else { continue }
+            if requireMenuBar {
+                guard try attribute(root, kAXRoleAttribute, deadline, strict: true) as? String == kAXApplicationRole else {
+                    throw NativeDiscoveryError.staleGeometry
+                }
+            }
+            // With no remaining extras, SystemUIServer can stop exposing this
+            // attribute. Accept only an explicit no-value/unsupported response
+            // from the responsive application, never an IPC or permission error.
+            guard let raw = try attribute(root, kAXExtrasMenuBarAttribute, deadline, strict: requireMenuBar) else { continue }
+            guard CFGetTypeID(raw) == AXUIElementGetTypeID() else {
+                if requireMenuBar { throw NativeDiscoveryError.staleGeometry }
+                continue
+            }
             let bar = unsafeDowncast(raw, to: AXUIElement.self)
-            guard let children = try attribute(bar, kAXChildrenAttribute, deadline) as? [AXUIElement] else { continue }
+            guard let children = try attribute(bar, kAXChildrenAttribute, deadline, strict: requireMenuBar) as? [AXUIElement] else {
+                if requireMenuBar { throw NativeDiscoveryError.staleGeometry }
+                continue
+            }
             guard children.count <= 128, inventory.count + children.count <= 512 else {
                 throw NativeDiscoveryError.inventoryLimitExceeded
             }
@@ -124,7 +163,8 @@ enum NativeDiscovery {
             let legacyMetadata: [[String]] = try target.bundleID == "com.apple.systemuiserver"
                 ? children.map { try systemMetadata($0, deadline) } : []
             let legacyKeys = SystemMenuItemKind.legacyPositionKeys(
-                metadataByChild: legacyMetadata, configuredExtras: configuredLegacyExtras)
+                metadataByChild: legacyMetadata, configuredExtras: configuredLegacyExtras,
+                removedExtraIDs: removedLegacyExtraIDs)
             for (childIndex, child) in children.enumerated() {
                 let (identifier, rectangle) = try identityAndFrame(child, deadline)
                 let bundle = target.bundleID.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 }
@@ -380,7 +420,7 @@ enum NativeDiscovery {
     }
 
     private static func attribute(_ element: AXUIElement, _ name: String,
-                                  _ deadline: ContinuousClock.Instant) throws -> CFTypeRef? {
+                                  _ deadline: ContinuousClock.Instant, strict: Bool = false) throws -> CFTypeRef? {
         try checkpoint(deadline)
         let remaining = ContinuousClock.now.duration(to: deadline).components
         let seconds = Double(remaining.seconds) + Double(remaining.attoseconds) / 1e18
@@ -392,6 +432,9 @@ enum NativeDiscovery {
         // invalidates the entire inventory. Move verification still requires
         // successful fresh attributes and a matching hit at both endpoints.
         if status == .apiDisabled, !AXIsProcessTrusted() { throw NativeDiscoveryError.permissionDenied }
+        if strict, status != .success, status != .noValue, status != .attributeUnsupported {
+            throw NativeDiscoveryError.staleGeometry
+        }
         return status == .success ? value : nil
     }
 

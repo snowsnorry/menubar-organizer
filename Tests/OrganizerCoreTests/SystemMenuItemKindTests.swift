@@ -117,4 +117,22 @@ final class SystemMenuItemKindTests: XCTestCase {
             configuredExtras: extras + ["/tmp/Unknown.menu"]), [nil, nil,
                 "status:com.apple.systemuiserver::com.apple.menuextra.vpn"])
     }
+
+    func testRemovedVPNDoesNotMakeUnlabelledTimeMachineAmbiguous() {
+        let extras = ["/System/Library/CoreServices/Menu Extras/TimeMachine.menu",
+                      "/System/Library/CoreServices/Menu Extras/VPN.menu"]
+        XCTAssertEqual(SystemMenuItemKind.legacyPositionKeys(metadataByChild: [[]],
+            configuredExtras: extras), [nil])
+        XCTAssertEqual(SystemMenuItemKind.legacyPositionKeys(metadataByChild: [[]],
+            configuredExtras: extras, removedExtraIDs: ["com.apple.menuextra.vpn"]),
+            ["status:com.apple.systemuiserver::com.apple.menuextra.TimeMachine"])
+        XCTAssertEqual(SystemMenuItemKind.legacyPositionKeys(metadataByChild: [[], []],
+            configuredExtras: extras, removedExtraIDs: ["com.apple.menuextra.vpn"]), [nil, nil])
+        XCTAssertEqual(SystemMenuItemKind.legacyPositionKeys(metadataByChild: [["VPN"]],
+            configuredExtras: extras, removedExtraIDs: ["com.apple.menuextra.vpn"]), [nil])
+        XCTAssertEqual(SystemMenuItemKind.legacyPositionKeys(metadataByChild: [[]],
+            configuredExtras: extras + ["/tmp/Unknown.menu"],
+            removedExtraIDs: ["com.apple.menuextra.vpn"]), [nil])
+    }
+
 }

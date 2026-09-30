@@ -224,9 +224,9 @@ final class ItemRegistryTests: XCTestCase {
         XCTAssertTrue(initial.items[0].canReorder)
         XCTAssertTrue(initial.items[0].canSetVisibility)
         let hidden = try LayoutEditor.move(ItemRegistry.timeMachinePositionID, to: .hidden, at: 0, in: initial.layout)
-        XCTAssertEqual(ItemRegistry.systemVisibilityTarget(for: hidden.entries[0]), "com.apple.systemuiserver")
+        XCTAssertEqual(ItemRegistry.systemVisibilityTarget(for: hidden.entries[0]), "legacy-extra:com.apple.menuextra.TimeMachine")
         XCTAssertEqual(ItemRegistry.eligibleHiddenApplications(in: try ItemRegistry.reconcile([timeMachine], with: hidden)),
-                       ["com.apple.systemuiserver"])
+                       ["legacy-extra:com.apple.menuextra.TimeMachine"])
         let disappeared = try ItemRegistry.reconcile([], with: hidden)
         XCTAssertEqual(disappeared.items[0].availability, .absent)
         XCTAssertTrue(disappeared.items[0].canSetVisibility)
@@ -362,21 +362,26 @@ final class ItemRegistryTests: XCTestCase {
         }
     }
 
-    func testVPNIsUnsupportedWithoutHidingSharedSystemUIServer() throws {
+    func testVPNAndTimeMachineHaveIndependentLegacyTargets() throws {
         let vpn = DiscoveredItem(bundleID: "com.apple.systemuiserver", identifier: nil,
             name: "VPN", positionTableKey: "status:com.apple.systemuiserver::com.apple.menuextra.vpn")
         let timeMachine = DiscoveredItem(bundleID: "com.apple.systemuiserver", identifier: nil,
             name: "Time Machine", positionTableKey:
                 "status:com.apple.systemuiserver::com.apple.menuextra.TimeMachine")
         let snapshot = try ItemRegistry.reconcile([vpn, timeMachine], with: LayoutDocument())
-        XCTAssertTrue(snapshot.items[0].isUnsupportedInSettings)
-        XCTAssertFalse(snapshot.items[0].canReorder)
-        XCTAssertFalse(snapshot.items[0].canSetVisibility)
+        XCTAssertFalse(snapshot.items[0].isUnsupportedInSettings)
+        XCTAssertTrue(snapshot.items[0].canReorder)
+        XCTAssertTrue(snapshot.items[0].canSetVisibility)
         XCTAssertTrue(snapshot.items[1].canReorder)
         XCTAssertTrue(snapshot.items[1].canSetVisibility)
         let hidden = try LayoutEditor.move(ItemRegistry.timeMachinePositionID, to: .hidden, at: 0, in: snapshot.layout)
         XCTAssertEqual(ItemRegistry.eligibleHiddenApplications(in:
-            try ItemRegistry.reconcile([vpn, timeMachine], with: hidden)), ["com.apple.systemuiserver"])
+            try ItemRegistry.reconcile([vpn, timeMachine], with: hidden)), ["legacy-extra:com.apple.menuextra.TimeMachine"])
+        let vpnHidden = try LayoutEditor.move(ItemRegistry.vpnPositionID, to: .hidden, at: 0, in: snapshot.layout)
+        XCTAssertEqual(ItemRegistry.eligibleHiddenApplications(in:
+            try ItemRegistry.reconcile([vpn, timeMachine], with: vpnHidden)), ["legacy-extra:com.apple.menuextra.vpn"])
+        let ambiguous = try ItemRegistry.reconcile([vpn, vpn, timeMachine], with: vpnHidden)
+        XCTAssertTrue(ItemRegistry.eligibleHiddenApplications(in: ambiguous).isEmpty)
     }
 
     func testUnsupportedSectionKeepsSavedGroupsButLocksKnownAndUnknownIcons() throws {
@@ -387,7 +392,7 @@ final class ItemRegistryTests: XCTestCase {
         let user = DiscoveredItem(bundleID: "com.apple.MenuBarAgent", identifier: nil,
             name: "User", isSupported: false, presentationID: "user")
         let vpn = DiscoveredItem(bundleID: "com.apple.systemuiserver", identifier: nil,
-            name: "VPN", positionTableKey: "status:com.apple.systemuiserver::com.apple.menuextra.vpn")
+            name: "VPN", isSupported: false, positionTableKey: "status:com.apple.systemuiserver::com.apple.menuextra.vpn")
         let unknown = DiscoveredItem(bundleID: "com.apple.unknown", identifier: nil,
             name: "Unknown", isSupported: false, presentationID: "unknown")
         let saved = LayoutDocument(entries: [

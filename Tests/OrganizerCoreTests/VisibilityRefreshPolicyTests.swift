@@ -21,14 +21,14 @@ final class VisibilityRefreshPolicyTests: XCTestCase {
         XCTAssertFalse(VisibilityRefreshPolicy.canKeepCurrentAssertion(applied: applied, current: changed, snapshot: absent))
     }
 
-    func testTimeMachineAccessibilityRowDoesNotForceFullCheck() throws {
+    func testTimeMachineReappearanceRequiresFullCheck() throws {
         let entry = LayoutEntry(id: ItemRegistry.timeMachinePositionID, bundleID: "com.apple.systemuiserver",
                                 name: "Time Machine", group: .hidden)
         let layout = LayoutDocument(entries: [entry])
         let observation = DiscoveredItem(bundleID: entry.bundleID, identifier: "time-machine", name: entry.name,
                                          positionTableKey: "status:com.apple.systemuiserver::com.apple.menuextra.TimeMachine")
         let snapshot = try ItemRegistry.reconcile([observation], with: layout)
-        XCTAssertTrue(VisibilityRefreshPolicy.canKeepCurrentAssertion(applied: layout, current: layout, snapshot: snapshot))
+        XCTAssertFalse(VisibilityRefreshPolicy.canKeepCurrentAssertion(applied: layout, current: layout, snapshot: snapshot))
     }
 
     func testSystemModuleAccessibilityRowDoesNotForceFullCheck() throws {
@@ -40,4 +40,23 @@ final class VisibilityRefreshPolicyTests: XCTestCase {
         let snapshot = try ItemRegistry.reconcile([observation], with: layout)
         XCTAssertTrue(VisibilityRefreshPolicy.canKeepCurrentAssertion(applied: layout, current: layout, snapshot: snapshot))
     }
+
+    func testFailedLegacyTargetDoesNotForceRebuildingOtherApplicationFilter() throws {
+        let entry = LayoutEntry(id: ItemRegistry.vpnPositionID, bundleID: "com.apple.systemuiserver",
+                                name: "VPN", group: .hidden)
+        let layout = LayoutDocument(entries: [hidden, entry])
+        let observation = DiscoveredItem(bundleID: entry.bundleID, identifier: nil, name: entry.name,
+                                        positionTableKey: "status:com.apple.systemuiserver::com.apple.menuextra.vpn")
+        let snapshot = try ItemRegistry.reconcile([observation], with: layout)
+        let failed: Set<String> = ["legacy-extra:com.apple.menuextra.vpn"]
+        XCTAssertTrue(VisibilityRefreshPolicy.canKeepCurrentAssertion(applied: layout, current: layout,
+            snapshot: snapshot, failedSystemTargets: failed))
+        XCTAssertFalse(VisibilityRefreshPolicy.canKeepCurrentAssertion(applied: layout, current: layout,
+            snapshot: snapshot))
+        let appReappeared = try ItemRegistry.reconcile([observation,
+            DiscoveredItem(bundleID: hidden.bundleID, identifier: nil, name: hidden.name)], with: layout)
+        XCTAssertFalse(VisibilityRefreshPolicy.canKeepCurrentAssertion(applied: layout, current: layout,
+            snapshot: appReappeared, failedSystemTargets: failed))
+    }
+
 }
