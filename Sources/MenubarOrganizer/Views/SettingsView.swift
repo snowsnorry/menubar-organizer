@@ -235,7 +235,7 @@ struct SettingsView: View {
 
     private var unsupportedItems: [RegistryItem] {
         model.items.filter { $0.isUnsupportedInSettings && !$0.isPinnedSystemItem &&
-            !$0.isOmittedFromSettings && !$0.isUnavailableVisibleSystemItem }
+            !$0.isOmittedFromSettings }
     }
 
     private func items(in group: ItemGroup) -> [RegistryItem] {

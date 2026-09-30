@@ -18,7 +18,7 @@ final class NativeBackend: LayoutBackend {
     private var hiddenFingerprint: [String] = []
     private var recentlyRevealedApplications: Set<String>?
     private var recentlyRevealedFingerprint: [String] = []
-    private var unsupportedModules = UnsupportedModulePresence()
+    private let unsupportedModules = UnsupportedModulePresence()
 
     private var fingerprint: [String] {
         NSWorkspace.shared.runningApplications
@@ -89,8 +89,7 @@ final class NativeBackend: LayoutBackend {
     func discover() async throws -> [DiscoveredItem] {
         if let tail { _ = try? await tail.value }
         var observed = try await inventory(refresh: false).map(\.item)
-        let missing = unsupportedModules.missingKeys(observed: observed,
-            configured: try? positionStore.configuredUnsupportedModules())
+        let missing = unsupportedModules.missingKeys(observed: observed)
         for key in missing {
             let name = switch key {
             case "module:AudioVideoModule": "system.audioVideoControls"
@@ -100,6 +99,23 @@ final class NativeBackend: LayoutBackend {
             observed.append(DiscoveredItem(bundleID: "com.apple.MenuBarAgent", identifier: nil,
                 name: L10n.text(name), isDirectlyAccessible: false,
                 isSupported: false, positionTableKey: key))
+        }
+        for (key, bundle, name) in [
+            ("module:FocusModes", "com.apple.MenuBarAgent", "system.focus"),
+            ("status:com.apple.systemuiserver::com.apple.menuextra.vpn", "com.apple.systemuiserver", "system.vpn")
+        ] where !observed.contains(where: { $0.positionTableKey == key }) {
+            observed.append(DiscoveredItem(bundleID: bundle, identifier: nil,
+                name: L10n.text(name), isDirectlyAccessible: false,
+                isSupported: false, positionTableKey: key))
+        }
+        for (service, name) in [
+            ("nowPlaying", "system.nowPlaying"),
+            ("timer", "system.timer"),
+            ("accessibility", "system.accessibility")
+        ] where !observed.contains(where: { $0.systemServiceID == service }) {
+            observed.append(DiscoveredItem(bundleID: "com.apple.MenuBarAgent", identifier: nil,
+                name: L10n.text(name), isDirectlyAccessible: false,
+                isSupported: false, systemServiceID: service))
         }
         return observed
     }

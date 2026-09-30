@@ -11,17 +11,22 @@ public struct DiscoveredItem: Equatable, Sendable {
     /// Exact key in the macOS menu-bar position table, only for a verified
     /// one-to-one system status item. Never inferred from its display name.
     public var positionTableKey: String?
+    /// Stable presentation identity for a recognized read-only system service.
+    /// This is not a position-table key and never authorizes layout changes.
+    public var systemServiceID: String?
     public var isPinnedSystemItem: Bool
     public var isOmittedFromSettings: Bool
 
     public init(bundleID: String?, identifier: String?, name: String,
                 isDirectlyAccessible: Bool = true, isSupported: Bool = true, presentationID: String? = nil,
-                positionTableKey: String? = nil, isPinnedSystemItem: Bool = false,
+                positionTableKey: String? = nil, systemServiceID: String? = nil,
+                isPinnedSystemItem: Bool = false,
                 isOmittedFromSettings: Bool = false) {
         self.bundleID = bundleID; self.identifier = identifier; self.name = name
         self.isDirectlyAccessible = isDirectlyAccessible; self.isSupported = isSupported
         self.presentationID = presentationID
         self.positionTableKey = positionTableKey
+        self.systemServiceID = systemServiceID
         self.isPinnedSystemItem = isPinnedSystemItem
         self.isOmittedFromSettings = isOmittedFromSettings
     }
@@ -149,6 +154,7 @@ public enum ItemRegistry {
         guard let bundle = observation.bundleID, !bundle.isEmpty else { return nil }
         if bundle.hasPrefix("com.apple.") {
             if let key = observation.positionTableKey, !key.isEmpty { return "system-position:\(key)" }
+            if let service = observation.systemServiceID, !service.isEmpty { return "system-service:\(service)" }
             if let presentation = observation.presentationID, !presentation.isEmpty {
                 return "system-presentation:\(bundle.utf8.count):\(bundle)\(presentation)"
             }

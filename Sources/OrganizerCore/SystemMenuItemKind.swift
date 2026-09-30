@@ -33,8 +33,8 @@ public enum SystemMenuItemKind: String, CaseIterable, Sendable {
         }
     }
 
-    /// Presentation symbols for read-only modules whose localized AX titles
-    /// may change or disappear while the menu bar is collapsed.
+    /// Presentation symbols for system items whose localized AX titles may
+    /// change or disappear while the menu bar is collapsed.
     public static func symbol(forPositionID id: String) -> String? {
         switch id {
         case "system-position:module:AudioVideoModule": "video.badge.waveform"
@@ -42,6 +42,9 @@ public enum SystemMenuItemKind: String, CaseIterable, Sendable {
         case "system-position:module:UserSwitcher": "person.crop.circle"
         case "system-position:module:Displays": "display"
         case "system-position:module:Timer": "timer"
+        case "system-service:nowPlaying": "play.circle"
+        case "system-service:timer": "timer"
+        case "system-service:accessibility": "accessibility"
         default: nil
         }
     }

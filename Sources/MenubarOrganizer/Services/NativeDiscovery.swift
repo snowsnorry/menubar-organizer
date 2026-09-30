@@ -192,12 +192,16 @@ enum NativeDiscovery {
                     }) ?? L10n.text("system.other")
                     : target.name
                 let isReadOnlyModule = positionKey.map { UnsupportedModulePresence.keys.contains($0) } ?? false
+                let readOnlyService = positionKey == nil ? kind.flatMap {
+                    [SystemMenuItemKind.nowPlaying, .timer, .accessibility].contains($0) ? $0.rawValue : nil
+                } : nil
                 inventory.append(NativeItem(item: DiscoveredItem(bundleID: bundle, identifier: identifier,
                     name: name, isDirectlyAccessible: false,
                     isSupported: (positionKey != nil && !isReadOnlyModule) ||
                         (bundle.map { !$0.hasPrefix("com.apple.") } ?? false),
                     presentationID: isSystem ? "\(target.pid):\(childIndex)" : nil,
                     positionTableKey: positionKey,
+                    systemServiceID: readOnlyService,
                     isPinnedSystemItem: (bundle == "com.apple.controlcenter" || bundle == "com.apple.MenuBarAgent") &&
                         (positionKey == "module:Clock" || positionKey == "module:BentoBox-0" ||
                          (positionKey == nil && kind == .controlCenter &&

@@ -2,8 +2,10 @@ import XCTest
 @testable import OrganizerCore
 
 final class UnsupportedModulePresenceTests: XCTestCase {
-    func testObservedModulesRemainListedAfterCollapseWithoutPositionAccess() {
-        var presence = UnsupportedModulePresence()
+    func testKnownModulesAreListedBeforeDiscoveryAndAfterCollapse() {
+        let presence = UnsupportedModulePresence()
+        XCTAssertEqual(presence.missingKeys(observed: []),
+                       ["module:AudioVideoModule", "module:AirDrop", "module:UserSwitcher"])
         let expanded = [
             DiscoveredItem(bundleID: "com.apple.MenuBarAgent", identifier: nil,
                 name: "Audio and Video Controls", isSupported: false,
@@ -13,15 +15,15 @@ final class UnsupportedModulePresenceTests: XCTestCase {
             DiscoveredItem(bundleID: "com.apple.MenuBarAgent", identifier: nil,
                 name: "User", isSupported: false, positionTableKey: "module:UserSwitcher")
         ]
-        XCTAssertTrue(presence.missingKeys(observed: expanded, configured: nil).isEmpty)
-        XCTAssertEqual(presence.missingKeys(observed: [], configured: nil),
+        XCTAssertTrue(presence.missingKeys(observed: expanded).isEmpty)
+        XCTAssertEqual(presence.missingKeys(observed: []),
                        ["module:AudioVideoModule", "module:AirDrop", "module:UserSwitcher"])
     }
 
-    func testConfiguredModulesAppearBeforeAXDiscoveryAndCanDisappearWhenDisabled() {
-        var presence = UnsupportedModulePresence()
-        XCTAssertEqual(presence.missingKeys(observed: [], configured: ["module:AudioVideoModule"]),
-                       ["module:AudioVideoModule"])
-        XCTAssertTrue(presence.missingKeys(observed: [], configured: []).isEmpty)
+    func testObservedModuleDoesNotProduceDuplicateRow() {
+        let observed = DiscoveredItem(bundleID: "com.apple.MenuBarAgent", identifier: nil,
+            name: "AirDrop", positionTableKey: "module:AirDrop")
+        XCTAssertEqual(UnsupportedModulePresence().missingKeys(observed: [observed]),
+                       ["module:AudioVideoModule", "module:UserSwitcher"])
     }
 }

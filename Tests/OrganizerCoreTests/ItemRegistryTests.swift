@@ -404,6 +404,46 @@ final class ItemRegistryTests: XCTestCase {
         XCTAssertEqual(snapshot.layout.entries.count, 2)
     }
 
+    func testStandardUnsupportedItemsHaveStableRowsWithoutVisibleIcons() throws {
+        let descriptions: [(String, String, String)] = [
+            ("com.apple.MenuBarAgent", "module:AudioVideoModule", "Audio and Video Controls"),
+            ("com.apple.MenuBarAgent", "module:AirDrop", "AirDrop"),
+            ("com.apple.MenuBarAgent", "module:UserSwitcher", "User"),
+            ("com.apple.MenuBarAgent", "module:FocusModes", "Focus"),
+            ("com.apple.systemuiserver", "status:com.apple.systemuiserver::com.apple.menuextra.vpn", "VPN")
+        ]
+        let placeholders = descriptions.map { bundle, key, name in
+            DiscoveredItem(bundleID: bundle, identifier: nil, name: name,
+                isDirectlyAccessible: false, isSupported: false, positionTableKey: key)
+        }
+        let snapshot = try ItemRegistry.reconcile(placeholders, with: LayoutDocument())
+        XCTAssertTrue(snapshot.layout.entries.isEmpty)
+        XCTAssertEqual(snapshot.items.map(\.id), descriptions.map { "system-position:\($0.1)" })
+        XCTAssertTrue(snapshot.items.allSatisfy {
+            $0.isUnsupportedInSettings && !$0.canReorder && !$0.canSetVisibility
+        })
+    }
+
+    func testReadOnlySystemServicesKeepOneRowWhenObserved() throws {
+        for (service, name) in [("nowPlaying", "Now Playing"),
+                                ("timer", "Timer"),
+                                ("accessibility", "Accessibility")] {
+            let placeholder = DiscoveredItem(bundleID: "com.apple.MenuBarAgent", identifier: nil,
+                name: name, isSupported: false, systemServiceID: service)
+            let observed = DiscoveredItem(bundleID: "com.apple.controlcenter", identifier: nil,
+                name: name, isSupported: false, presentationID: "123:1", systemServiceID: service)
+            let absent = try ItemRegistry.reconcile([placeholder], with: LayoutDocument())
+            let present = try ItemRegistry.reconcile([observed], with: absent.layout)
+            XCTAssertEqual(absent.items.map(\.id), ["system-service:\(service)"])
+            XCTAssertEqual(present.items.map(\.id), ["system-service:\(service)"])
+            XCTAssertTrue(absent.layout.entries.isEmpty)
+            XCTAssertTrue(present.layout.entries.isEmpty)
+            XCTAssertTrue(present.items[0].isUnsupportedInSettings)
+            XCTAssertFalse(present.items[0].canReorder)
+            XCTAssertFalse(present.items[0].canSetVisibility)
+        }
+    }
+
     func testSavedUnsupportedFocusRemainsListedWhenTemporarilyAbsent() throws {
         let hiddenFocus = LayoutEntry(id: "system-position:module:FocusModes",
             bundleID: "com.apple.MenuBarAgent", name: "Focus", group: .hidden)
