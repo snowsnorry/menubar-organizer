@@ -21,6 +21,8 @@ final class OrganizerAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegat
     private var lastScreenLocked: Bool?
     private var lastLockPollUptime = 0.0
     private var lastScreenConfiguration: [String] = []
+    private var screenChangeTask: Task<Void, Never>?
+    private var screenChangeGeneration: UInt64 = 0
     private var terminating = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -231,12 +233,22 @@ final class OrganizerAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegat
         notifications.append(NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
                                                                     object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
-                guard let self else { return }
+                guard let self, !self.terminating else { return }
                 let configuration = self.screenConfiguration()
                 guard configuration != self.lastScreenConfiguration else { return }
                 self.lastScreenConfiguration = configuration
-                await self.model.suspend(reason: .backendUnavailable)
-                await self.model.refresh(adoptObserved: false, restoreSaved: true)
+                // A display change does not change the filter's targets. Keep
+                // its assertion while the menu bar moves, then verify it once
+                // the last display reconfiguration has settled.
+                self.screenChangeTask?.cancel()
+                self.screenChangeGeneration &+= 1
+                let generation = self.screenChangeGeneration
+                self.screenChangeTask = Task { @MainActor [weak self] in
+                    do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                    guard let self, !self.terminating, generation == self.screenChangeGeneration else { return }
+                    await self.model.refresh(adoptObserved: false, restoreSaved: true)
+                    if generation == self.screenChangeGeneration { self.screenChangeTask = nil }
+                }
             }
         })
         notifications.append(NotificationCenter.default.addObserver(forName: NSApplication.didBecomeActiveNotification,
@@ -312,6 +324,8 @@ final class OrganizerAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegat
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard !terminating else { return .terminateLater }
         terminating = true
+        screenChangeTask?.cancel()
+        screenChangeTask = nil
         pulse?.invalidate()
         menuObserver.stop()
         DistributedNotificationCenter.default().removeObserver(self)
