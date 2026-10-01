@@ -72,11 +72,6 @@ final class SettingsModel {
             Task { [weak self] in
                 guard let self else { return }
                 await self.suspend(reason: .backendUnavailable)
-                // Only inventory changes can be repaired by rebuilding the
-                // allow-list. Backend failures require a manual retry.
-                if case .inventoryChanged = error {
-                    await self.refresh(adoptObserved: false, restoreSaved: true)
-                }
             }
         }
     }
@@ -497,7 +492,7 @@ final class SettingsModel {
             }
         }
         defer { if needsReordering { backend.endExplicitReordering() } }
-        let applied = await applyLayout(allowReordering: needsReordering, explicit: true)
+        let applied = await applyLayout(allowReordering: needsReordering, explicit: true, intent: .userSettings)
         if applied { positionedNewlyVisibleIDs = [] }
         if applied { onDismissSettings?() }
         return applied
@@ -642,7 +637,8 @@ final class SettingsModel {
     private func applyLayout(allowReordering: Bool = false, explicit: Bool = false,
                              restoreOrderBeforeHiding: Bool = false,
                              preserveSavedOrder: Bool = false,
-                             preserveManualRetry: Bool = false) async -> Bool {
+                             preserveManualRetry: Bool = false,
+                             intent: VisibilityRequestIntent = .automatic) async -> Bool {
         guard !stopped else { return false }
         var applied = false
         isBusy = true
@@ -656,11 +652,12 @@ final class SettingsModel {
         await serialize { [self] in
             guard token == revision else { return }
             let report = restoreOrderBeforeHiding
-                ? await coordinator.restoreSavedLayout(requested)
+                ? await coordinator.restoreSavedLayout(requested, intent: intent)
                 : await coordinator.apply(requested,
                     revealed: !explicit && reveal.state != .collapsed,
                     allowReordering: allowReordering,
-                    currentVisibilityLayout: backend.hasCurrentHiddenAssertion() ? lastAppliedHiddenLayout : nil)
+                    currentVisibilityLayout: !explicit && backend.hasCurrentHiddenAssertion() ? lastAppliedHiddenLayout : nil,
+                    intent: intent)
             guard token == revision, !stopped else { return }
             if let snapshot = report.snapshot {
                 items = snapshot.items
@@ -801,14 +798,20 @@ final class SettingsModel {
 
     func toggle() async {
         guard canToggleHidden else { return }
+        Logger(subsystem: "local.menubarorganizer.app", category: "visibility")
+            .notice("User toggled hidden items; active=\(self.backend.visibility.isActive, privacy: .public)")
+        // A user can reveal an accepted filter even while diagnostics are paused.
+        if case .suspended = reveal.state, backend.visibility.isActive {
+            await run(reveal.confirmExplicitHide())
+        }
         // The visibility assertion can be released over sleep while the policy
         // still says collapsed. In that case the control means "hide now".
         if reveal.state != .revealed, !backend.visibility.isActive,
            draft.committed.entries.contains(where: { $0.group == .hidden }) {
-            await run(reveal.requestHide())
+            await run(reveal.requestHide(), intent: .userToggle)
             return
         }
-        await run(reveal.toggle(now: now))
+        await run(reveal.toggle(now: now), intent: .userToggle)
     }
 
     func interaction(pointerInside: Bool, menuOpen: Bool) async {
@@ -856,6 +859,8 @@ final class SettingsModel {
     func suspend(reason: RevealController.SuspensionReason) async {
         guard !stopped, !isPreview else { return }
         if reason == .lifecycle, lifecycleSuspended { return }
+        Logger(subsystem: "local.menubarorganizer.app", category: "visibility")
+            .notice("Visibility suspended; reason=\(String(describing: reason), privacy: .public)")
         if reason == .lifecycle { lifecycleSuspended = true; refreshAfterBusy = false }
         revision &+= 1
         let token = revision
@@ -863,7 +868,7 @@ final class SettingsModel {
         timer?.cancel(); timer = nil
         backend.cancelGestures()
         let effects = reveal.suspend(reason: reason)
-        backend.visibility.invalidateForTermination()
+        // Suspension pauses work; it never releases accepted visibility.
         await coordinator.cancelPending()
         guard token == revision, !stopped else { return }
         await run(effects)
@@ -974,7 +979,7 @@ final class SettingsModel {
     private func layoutErrorCode(_ error: String?) -> String {
         // Never emit raw error text: associated values may include application
         // identifiers, names, paths, or messages from another process.
-        if error == "Visibility eligibility changed; unsafe applications were revealed." {
+        if error == "Visibility eligibility could not be verified; accepted filter preserved." {
             return "visibilityEligibilityChanged"
         }
         if error?.hasPrefix("targetNotRunning(") == true { return "targetNotRunning" }
@@ -982,7 +987,7 @@ final class SettingsModel {
         if error?.hasPrefix("activationFailed(") == true { return "activationFailed" }
         let permitted: Set<String> = [
             "unsupportedBuild", "runtimeUnavailable", "competingManager",
-            "allocationFailed", "activationTimedOut", "superseded", "inventoryChanged",
+            "allocationFailed", "activationTimedOut", "superseded",
             "permissionDenied", "timeBudgetExceeded",
             "inventoryLimitExceeded", "staleGeometry", "ambiguousIdentity",
             "unsupported", "unavailable", "inputBusy", "obstructed", "expired", "nonintrusiveReorderingUnavailable",
@@ -1006,7 +1011,7 @@ final class SettingsModel {
         await task.value
     }
 
-    private func run(_ effects: [RevealController.Effect]) async {
+    private func run(_ effects: [RevealController.Effect], intent: VisibilityRequestIntent = .automatic) async {
         guard !stopped else { return }
         let changesVisibility = effects.contains(.showHidden) || effects.contains(.hideHidden)
         if changesVisibility {
@@ -1054,7 +1059,7 @@ final class SettingsModel {
                     guard token == visibilityRevision, !stopped, reveal.state == .collapsed else { return }
                     hidden = ItemRegistry.eligibleHiddenApplications(in: snapshot)
                 }
-                try await backend.setHiddenApplications(hidden)
+                try await backend.setHiddenApplications(hidden, intent: intent)
                 Logger(subsystem: "local.menubarorganizer.app", category: "visibility").notice("Applied visibility: hidden applications=\(hidden.count), uptime=\(self.now)")
                 guard token == visibilityRevision, !stopped else { return }
                 reveal.confirmVisibility(backend.visibility.isActive ? .hidden : .visible)

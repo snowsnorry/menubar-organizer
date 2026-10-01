@@ -84,32 +84,33 @@ final class RevealControllerTests: XCTestCase {
         XCTAssertEqual(controller.setMenuOpen(false, now: 20), [.schedule(deadline: 30, token: 3)])
     }
 
-    func testSuspensionCancelsAndResumeFailsOpenWithFreshInterval() {
+    func testSuspensionOnlyPausesTimerAndResumeDoesNotReveal() {
         for reason in [RevealController.SuspensionReason.backendUnavailable, .permissionsUnavailable] {
             var controller = RevealController()
             _ = controller.toggle(now: 0)
-            XCTAssertEqual(controller.suspend(reason: reason), [.cancelTimer, .showHidden])
+            XCTAssertEqual(controller.suspend(reason: reason), [.cancelTimer])
             XCTAssertEqual(controller.state, .suspended(reason))
             XCTAssertNil(controller.deadline)
             XCTAssertEqual(controller.toggle(now: 10), [])
             XCTAssertEqual(controller.timerFired(token: 1, now: 10), [])
             XCTAssertEqual(controller.noteActivity(now: 10), [])
-            XCTAssertEqual(controller.resume(now: 100), [.showHidden, .schedule(deadline: 105, token: 2)])
+            XCTAssertEqual(controller.resume(now: 100), [.schedule(deadline: 105, token: 2)])
             XCTAssertEqual(controller.timerFired(token: 1, now: 104), [])
             XCTAssertEqual(controller.resume(now: 104), [])
         }
     }
 
-    func testLifecycleResumeRestoresCollapsedPolicyWithoutARevealDelay() {
-        var controller = RevealController()
-        _ = controller.toggle(now: 0)
-        controller.confirmVisibility(.visible)
-        XCTAssertEqual(controller.suspend(reason: .lifecycle), [.cancelTimer, .showHidden])
-        XCTAssertEqual(controller.resume(now: 100), [])
-        XCTAssertEqual(controller.state, .collapsed)
-        XCTAssertNil(controller.deadline)
-        XCTAssertEqual(controller.observedVisibility, .visible)
-        XCTAssertEqual(controller.timerFired(token: 1, now: 105), [])
+    func testCollapsedPolicySurvivesEverySuspensionReasonWithoutVisibilityEffects() {
+        for reason in [RevealController.SuspensionReason.lifecycle, .backendUnavailable, .permissionsUnavailable] {
+            var controller = RevealController()
+            controller.confirmVisibility(.hidden)
+            XCTAssertEqual(controller.suspend(reason: reason), [])
+            XCTAssertEqual(controller.suspend(reason: reason), [])
+            XCTAssertEqual(controller.resume(now: 100), [])
+            XCTAssertEqual(controller.state, .collapsed)
+            XCTAssertEqual(controller.observedVisibility, .hidden)
+            XCTAssertNil(controller.deadline)
+        }
     }
 
     func testLifecycleRestoreOverridesInterveningBackendSuspension() {
@@ -152,12 +153,12 @@ final class RevealControllerTests: XCTestCase {
     func testSuspensionPreservesOpenMenuAndObservedVisibility() {
         var controller = RevealController()
         controller.confirmVisibility(.hidden)
-        XCTAssertEqual(controller.suspend(reason: .backendUnavailable), [.showHidden])
+        XCTAssertEqual(controller.suspend(reason: .backendUnavailable), [])
         _ = controller.setMenuOpen(true, now: 0)
-        XCTAssertEqual(controller.resume(now: 5), [.showHidden])
+        XCTAssertEqual(controller.resume(now: 5), [])
         XCTAssertEqual(controller.observedVisibility, .hidden)
         XCTAssertNil(controller.deadline)
-        XCTAssertEqual(controller.setMenuOpen(false, now: 10), [.schedule(deadline: 15, token: 1)])
+        XCTAssertEqual(controller.setMenuOpen(false, now: 10), [])
     }
 
     func testExplicitHideRecoversFromSuspensionWithoutRevealingAgain() {
@@ -215,9 +216,9 @@ final class RevealControllerTests: XCTestCase {
         _ = controller.toggle(now: 0)
         _ = controller.setMenuOpen(true, now: 1)
         _ = controller.toggle(now: 2)
-        XCTAssertEqual(controller.suspend(reason: .lifecycle), [.showHidden])
+        XCTAssertEqual(controller.suspend(reason: .lifecycle), [])
         XCTAssertFalse(controller.pendingCollapse)
-        XCTAssertEqual(controller.resume(now: 5), [.showHidden])
+        XCTAssertEqual(controller.resume(now: 5), [])
         XCTAssertEqual(controller.setMenuOpen(false, now: 10), [.schedule(deadline: 15, token: 2)])
     }
 

@@ -2,11 +2,17 @@ import Foundation
 
 /// Discovery returns the observed left-to-right order. Each move must revalidate
 /// native coordinates immediately before issuing the gesture.
+public enum VisibilityRequestIntent: Sendable {
+    case automatic, userToggle, userSettings, termination
+
+    public var permitsRelease: Bool { self != .automatic }
+}
+
 public protocol LayoutBackend: Sendable {
     func discover() async throws -> [DiscoveredItem]
     func hasActiveVisibilityRestriction() async -> Bool
     func visibilityWarnings() async -> [VisibilityWarning]
-    func setHiddenApplications(_ bundleIDs: Set<String>) async throws
+    func setHiddenApplications(_ bundleIDs: Set<String>, intent: VisibilityRequestIntent) async throws
     func moveItem(id: String, before targetID: String) async throws
     func moveItem(id: String, relativeTo targetID: String, placement: ItemMovePlacement) async throws
 }
@@ -72,14 +78,15 @@ public actor LayoutCoordinator {
     }
 
     public func apply(_ document: LayoutDocument, revealed: Bool = false, allowReordering: Bool = true,
-                      currentVisibilityLayout: LayoutDocument? = nil) async -> LayoutApplyReport {
+                      currentVisibilityLayout: LayoutDocument? = nil,
+                      intent: VisibilityRequestIntent = .automatic) async -> LayoutApplyReport {
         generation &+= 1
         let token = generation
         let previous = tail
         let task = Task {
             if let previous { _ = await previous.value }
             return await self.perform(document, revealed: revealed, allowReordering: allowReordering,
-                                      currentVisibilityLayout: currentVisibilityLayout, token: token)
+                                      currentVisibilityLayout: currentVisibilityLayout, intent: intent, token: token)
         }
         tail = task
         let result = await task.value
@@ -89,11 +96,11 @@ public actor LayoutCoordinator {
 
     /// Restore saved order while every item is visible, then apply saved hiding.
     /// Hiding first would remove its targets from discovery and prevent moves.
-    public func restoreSavedLayout(_ document: LayoutDocument) async -> LayoutApplyReport {
+    public func restoreSavedLayout(_ document: LayoutDocument, intent: VisibilityRequestIntent = .automatic) async -> LayoutApplyReport {
         let orderingGeneration = generation &+ 1
-        let ordering = await apply(document, revealed: true, allowReordering: true)
+        let ordering = await apply(document, revealed: true, allowReordering: true, intent: intent)
         guard generation == orderingGeneration, ordering.status != .superseded else { return ordering }
-        var visibility = await apply(document, allowReordering: false)
+        var visibility = await apply(document, allowReordering: false, intent: intent)
         if visibility.status == .applied, ordering.status != .applied {
             visibility.status = .partial
             visibility.error = ordering.error ?? "nonintrusiveReorderingUnavailable"
@@ -112,46 +119,30 @@ public actor LayoutCoordinator {
         }
     }
 
-    private struct SafetyResult {
+    private struct VisibilityDiagnostic {
         var observations: [DiscoveredItem]
         var snapshot: RegistrySnapshot
         var hidden: Set<String>
-        var adjusted: Bool
+        var hasUnverifiedTargets: Bool
     }
 
-    /// Only removes applications from the hidden set. Each iteration therefore
-    /// strictly decreases a finite set; newly appearing items never cause hiding.
-    private func enforceSafeVisibility(_ observations: [DiscoveredItem], document: LayoutDocument,
-                                       hidden: Set<String>, token: UInt64) async throws -> SafetyResult? {
-        var result = SafetyResult(observations: observations,
-                                  snapshot: try ItemRegistry.reconcile(observations, with: document),
-                                  hidden: hidden, adjusted: false)
-        while true {
-            guard token == generation else { return nil }
-            let unsafe = Set(result.snapshot.items.compactMap { item -> String? in
-                guard item.availability != .absent, !item.canSetVisibility else { return nil }
-                if item.entry.bundleID.hasPrefix("com.apple.") {
-                    // An unrelated read-only sibling has no filter target of
-                    // its own and cannot revoke another extra's target.
-                    return ItemRegistry.systemVisibilityTarget(for: item.entry)
-                }
-                return item.entry.bundleID
-            })
-            // Absence after hiding is expected and does not prove ineligibility.
-            let safe = result.hidden.subtracting(unsafe)
-            guard safe != result.hidden else { return result }
-            try await backend.setHiddenApplications(safe)
-            guard token == generation else { return nil }
-            result.hidden = safe
-            result.adjusted = true
-            result.observations = try await backend.discover()
-            guard token == generation else { return nil }
-            result.snapshot = try ItemRegistry.reconcile(result.observations, with: document)
+    /// Post-activation inventory is diagnostic. A changed/ambiguous row must
+    /// never revoke an accepted filter, even during an explicit settings apply.
+    private func diagnoseVisibilityEligibility(_ observations: [DiscoveredItem], document: LayoutDocument,
+                                       hidden: Set<String>, token: UInt64) throws -> VisibilityDiagnostic? {
+        guard token == generation else { return nil }
+        let snapshot = try ItemRegistry.reconcile(observations, with: document)
+        let unverified = snapshot.items.contains { item in
+            let target = item.entry.bundleID.hasPrefix("com.apple.")
+                ? ItemRegistry.systemVisibilityTarget(for: item.entry) : item.entry.bundleID
+            return item.availability != .absent && !item.canSetVisibility && target.map(hidden.contains) == true
         }
+        return VisibilityDiagnostic(observations: observations, snapshot: snapshot,
+                            hidden: hidden, hasUnverifiedTargets: unverified)
     }
 
     private func perform(_ document: LayoutDocument, revealed: Bool, allowReordering: Bool,
-                         currentVisibilityLayout: LayoutDocument?, token: UInt64) async -> LayoutApplyReport {
+                         currentVisibilityLayout: LayoutDocument?, intent: VisibilityRequestIntent, token: UInt64) async -> LayoutApplyReport {
         var report = LayoutApplyReport(status: .superseded, visibilityApplied: false, snapshot: nil,
                                        observedOrder: [], movedCount: 0, deferredIDs: [], error: nil,
                                        fallbackError: nil, unverifiedSystemTargets: [])
@@ -159,6 +150,18 @@ public actor LayoutCoordinator {
         do {
             let document = try document.validated()
             var hidden: Set<String> = []
+            // Automatic callers cannot release or rebuild any active restriction,
+            // regardless of stale/missing layout metadata or failed diagnostics.
+            if !intent.permitsRelease, await backend.hasActiveVisibilityRestriction() {
+                report.visibilityApplied = true
+                let observations = try await backend.discover()
+                guard token == generation else { return report }
+                report.snapshot = try ItemRegistry.reconcile(observations, with: document)
+                report.observedOrder = observedIDs(observations)
+                report.visibilityWarnings = await backend.visibilityWarnings()
+                report.status = .applied
+                return report
+            }
             if !revealed, !allowReordering, let currentVisibilityLayout,
                await backend.hasActiveVisibilityRestriction() {
                 do {
@@ -190,7 +193,7 @@ public actor LayoutCoordinator {
                 // Reveal first, then derive the next allow-list from a full
                 // inventory instead of mistaking absent hidden icons for gone.
                 if await backend.hasActiveVisibilityRestriction() {
-                    try await backend.setHiddenApplications([])
+                    try await backend.setHiddenApplications([], intent: intent)
                     guard token == generation else { return report }
                 }
                 let before = try await backend.discover()
@@ -200,7 +203,7 @@ public actor LayoutCoordinator {
                 report.observedOrder = observedIDs(before)
                 hidden = ItemRegistry.eligibleHiddenApplications(in: beforeSnapshot)
             }
-            try await backend.setHiddenApplications(hidden)
+            try await backend.setHiddenApplications(hidden, intent: intent)
             // A later inventory read cannot undo an acknowledged visibility
             // request. Record it before any diagnostic work can throw.
             report.visibilityApplied = true
@@ -238,13 +241,13 @@ public actor LayoutCoordinator {
                 // Replacing the assertion here exposes every hidden icon briefly.
                 report.unverifiedSystemTargets = remainingSystemRows.sorted()
             }
-            guard let checked = try await enforceSafeVisibility(observations, document: document, hidden: hidden, token: token) else { return report }
-            if checked.adjusted {
+            guard let checked = try diagnoseVisibilityEligibility(observations, document: document, hidden: hidden, token: token) else { return report }
+            if checked.hasUnverifiedTargets {
                 report.snapshot = checked.snapshot
                 report.observedOrder = observedIDs(checked.observations)
                 report.visibilityApplied = !checked.hidden.isEmpty
                 report.status = .partial
-                report.error = "Visibility eligibility changed; unsafe applications were revealed."
+                report.error = "Visibility eligibility could not be verified; accepted filter preserved."
                 return report
             }
             hidden = checked.hidden
@@ -300,12 +303,12 @@ public actor LayoutCoordinator {
                     snapshot = try ItemRegistry.reconcile(observations, with: document)
                     report.snapshot = snapshot
                     report.observedOrder = observedIDs(observations)
-                    guard let checked = try await enforceSafeVisibility(observations, document: document, hidden: hidden, token: token) else { return report }
-                    if checked.adjusted {
+                    guard let checked = try diagnoseVisibilityEligibility(observations, document: document, hidden: hidden, token: token) else { return report }
+                    if checked.hasUnverifiedTargets {
                         report.snapshot = checked.snapshot
                         report.observedOrder = observedIDs(checked.observations)
                         report.status = .partial
-                        report.error = "Visibility eligibility changed; unsafe applications were revealed."
+                        report.error = "Visibility eligibility could not be verified; accepted filter preserved."
                         return report
                     }
                     hidden = checked.hidden

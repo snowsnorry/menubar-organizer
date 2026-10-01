@@ -11,24 +11,24 @@ final class VisibilityRefreshPolicyTests: XCTestCase {
         XCTAssertTrue(VisibilityRefreshPolicy.canKeepCurrentAssertion(applied: applied, current: current, snapshot: snapshot))
     }
 
-    func testRequiresFullCheckWhenHiddenIdentityChangesOrReappears() throws {
+    func testReappearingRowPreservesAssertionButChangedHiddenIdentityRequiresApply() throws {
         let applied = LayoutDocument(entries: [hidden])
         let visible = try ItemRegistry.reconcile([.init(bundleID: "org.hidden", identifier: nil, name: "Hidden")], with: applied)
-        XCTAssertFalse(VisibilityRefreshPolicy.canKeepCurrentAssertion(applied: applied, current: applied, snapshot: visible))
+        XCTAssertTrue(VisibilityRefreshPolicy.canKeepCurrentAssertion(applied: applied, current: applied, snapshot: visible))
 
         let changed = LayoutDocument(entries: [.init(id: hidden.id, bundleID: hidden.bundleID, name: hidden.name)])
         let absent = try ItemRegistry.reconcile([], with: changed)
         XCTAssertFalse(VisibilityRefreshPolicy.canKeepCurrentAssertion(applied: applied, current: changed, snapshot: absent))
     }
 
-    func testTimeMachineReappearanceRequiresFullCheck() throws {
+    func testTimeMachineReappearancePreservesAssertion() throws {
         let entry = LayoutEntry(id: ItemRegistry.timeMachinePositionID, bundleID: "com.apple.systemuiserver",
                                 name: "Time Machine", group: .hidden)
         let layout = LayoutDocument(entries: [entry])
         let observation = DiscoveredItem(bundleID: entry.bundleID, identifier: "time-machine", name: entry.name,
                                          positionTableKey: "status:com.apple.systemuiserver::com.apple.menuextra.TimeMachine")
         let snapshot = try ItemRegistry.reconcile([observation], with: layout)
-        XCTAssertFalse(VisibilityRefreshPolicy.canKeepCurrentAssertion(applied: layout, current: layout, snapshot: snapshot))
+        XCTAssertTrue(VisibilityRefreshPolicy.canKeepCurrentAssertion(applied: layout, current: layout, snapshot: snapshot))
     }
 
     func testSystemModuleAccessibilityRowDoesNotForceFullCheck() throws {
@@ -51,11 +51,11 @@ final class VisibilityRefreshPolicyTests: XCTestCase {
         let failed: Set<String> = ["legacy-extra:com.apple.menuextra.vpn"]
         XCTAssertTrue(VisibilityRefreshPolicy.canKeepCurrentAssertion(applied: layout, current: layout,
             snapshot: snapshot, failedSystemTargets: failed))
-        XCTAssertFalse(VisibilityRefreshPolicy.canKeepCurrentAssertion(applied: layout, current: layout,
+        XCTAssertTrue(VisibilityRefreshPolicy.canKeepCurrentAssertion(applied: layout, current: layout,
             snapshot: snapshot))
         let appReappeared = try ItemRegistry.reconcile([observation,
             DiscoveredItem(bundleID: hidden.bundleID, identifier: nil, name: hidden.name)], with: layout)
-        XCTAssertFalse(VisibilityRefreshPolicy.canKeepCurrentAssertion(applied: layout, current: layout,
+        XCTAssertTrue(VisibilityRefreshPolicy.canKeepCurrentAssertion(applied: layout, current: layout,
             snapshot: appReappeared, failedSystemTargets: failed))
     }
 

@@ -41,7 +41,7 @@ private actor FakeLayoutBackend: LayoutBackend {
         return shouldOmit ? items.filter { !currentHidden.contains($0.bundleID ?? "") } : items
     }
     func hasActiveVisibilityRestriction() async -> Bool { !currentHidden.isEmpty }
-    func setHiddenApplications(_ bundleIDs: Set<String>) async throws {
+    func setHiddenApplications(_ bundleIDs: Set<String>, intent: VisibilityRequestIntent) async throws {
         visibility.append(bundleIDs); events.append("visibility")
         if blockNextVisibility {
             blockNextVisibility = false
@@ -104,20 +104,20 @@ final class LayoutCoordinatorTests: XCTestCase {
         let warning = VisibilityWarning(target: "legacy-extra:com.apple.menuextra.vpn", reason: "legacyExtraVerificationFailed")
         await backend.configureWarnings([warning])
         let coordinator = LayoutCoordinator(backend: backend)
-        let first = await coordinator.apply(saved, allowReordering: false)
+        let first = await coordinator.apply(saved, allowReordering: false, intent: .userSettings)
         XCTAssertEqual(first.status, .applied)
         XCTAssertTrue(first.visibilityApplied)
         XCTAssertNil(first.error)
         XCTAssertEqual(first.visibilityWarnings, [warning])
         XCTAssertTrue(first.unverifiedSystemTargets.isEmpty)
-        let refresh = await coordinator.apply(saved, allowReordering: false, currentVisibilityLayout: saved)
+        let refresh = await coordinator.apply(saved, allowReordering: false, currentVisibilityLayout: saved, intent: .userSettings)
         XCTAssertEqual(refresh.visibilityWarnings, [warning])
         let beforeReveal = await backend.visibilityRequests()
         let targets: Set<String> = ["org.a", warning.target]
         XCTAssertEqual(beforeReveal, [targets])
-        let reveal = await coordinator.apply(saved, revealed: true, allowReordering: false)
+        let reveal = await coordinator.apply(saved, revealed: true, allowReordering: false, intent: .userSettings)
         XCTAssertTrue(reveal.visibilityWarnings.isEmpty)
-        let collapse = await coordinator.apply(saved, allowReordering: false)
+        let collapse = await coordinator.apply(saved, allowReordering: false, intent: .userSettings)
         XCTAssertEqual(collapse.status, .applied)
         XCTAssertEqual(collapse.visibilityWarnings, [warning])
         let afterCollapse = await backend.visibilityRequests()
@@ -130,8 +130,8 @@ final class LayoutCoordinatorTests: XCTestCase {
         await backend.omitHiddenFromDiscovery()
         let coordinator = LayoutCoordinator(backend: backend)
         let saved = document([a], hidden: ["a"])
-        let first = await coordinator.apply(saved, allowReordering: false)
-        let second = await coordinator.apply(saved, allowReordering: false)
+        let first = await coordinator.apply(saved, allowReordering: false, intent: .userSettings)
+        let second = await coordinator.apply(saved, allowReordering: false, intent: .userSettings)
         let visibility = await backend.visibilityRequests()
         XCTAssertEqual(first.status, .applied)
         XCTAssertEqual(second.status, .applied)
@@ -144,12 +144,56 @@ final class LayoutCoordinatorTests: XCTestCase {
         await backend.omitHiddenFromDiscovery()
         let coordinator = LayoutCoordinator(backend: backend)
         let saved = document([a], hidden: ["a"])
-        _ = await coordinator.apply(saved, allowReordering: false)
+        _ = await coordinator.apply(saved, allowReordering: false, intent: .userSettings)
         let second = await coordinator.apply(saved, allowReordering: false,
-                                             currentVisibilityLayout: saved)
+                                             currentVisibilityLayout: saved, intent: .userSettings)
         let requests = await backend.visibilityRequests()
         XCTAssertEqual(second.status, .applied)
         XCTAssertTrue(second.visibilityApplied)
+        XCTAssertEqual(requests, [["org.a"]])
+    }
+
+    func testPassiveRefreshWithReappearingHiddenRowAndNewAppDoesNotReleaseFilter() async {
+        let a = item("a")
+        let backend = FakeLayoutBackend([a])
+        let coordinator = LayoutCoordinator(backend: backend)
+        let saved = document([a], hidden: ["a"])
+        _ = await coordinator.apply(saved, allowReordering: false, intent: .userSettings)
+        // The hidden AX row remains, and another application appears later.
+        await backend.addOnDiscovery(3, items: [item("new")])
+        let refresh = await coordinator.apply(saved, allowReordering: false,
+                                              currentVisibilityLayout: saved, intent: .userSettings)
+        let requests = await backend.visibilityRequests()
+        XCTAssertEqual(refresh.status, .applied)
+        XCTAssertTrue(refresh.visibilityApplied)
+        XCTAssertEqual(requests, [["org.a"]])
+        XCTAssertTrue(refresh.snapshot?.items.contains { $0.entry.bundleID == "org.new" } == true)
+    }
+
+    func testAutomaticApplyCannotReplaceActiveFilterWithoutLayoutMetadata() async {
+        let a = item("a"), b = item("b")
+        let backend = FakeLayoutBackend([a, b])
+        let coordinator = LayoutCoordinator(backend: backend)
+        _ = await coordinator.apply(document([a, b], hidden: ["a"]), intent: .userSettings)
+        let changed = document([a, b], hidden: ["b"])
+        _ = await coordinator.apply(changed, revealed: true)
+        _ = await coordinator.apply(changed, intent: .automatic)
+        _ = await coordinator.restoreSavedLayout(changed, intent: .automatic)
+        let requests = await backend.visibilityRequests()
+        XCTAssertEqual(requests, [["org.a"]])
+    }
+
+    func testFailedAutomaticDiagnosticCannotReleaseAcceptedFilter() async {
+        let a = item("a")
+        let backend = FakeLayoutBackend([a])
+        let coordinator = LayoutCoordinator(backend: backend)
+        let saved = document([a], hidden: ["a"])
+        _ = await coordinator.apply(saved, allowReordering: false, intent: .userSettings)
+        await backend.failDiscoveries([3])
+        let report = await coordinator.apply(saved, intent: .automatic)
+        XCTAssertEqual(report.status, .failed)
+        XCTAssertTrue(report.visibilityApplied)
+        let requests = await backend.visibilityRequests()
         XCTAssertEqual(requests, [["org.a"]])
     }
 
@@ -161,9 +205,9 @@ final class LayoutCoordinatorTests: XCTestCase {
         let coordinator = LayoutCoordinator(backend: backend)
         let old = document([a, b], hidden: ["a"])
         let changed = document([a, b], hidden: ["a", "b"])
-        _ = await coordinator.apply(old, allowReordering: false)
+        _ = await coordinator.apply(old, allowReordering: false, intent: .userSettings)
         let second = await coordinator.apply(changed, allowReordering: false,
-                                             currentVisibilityLayout: old)
+                                             currentVisibilityLayout: old, intent: .userSettings)
         let requests = await backend.visibilityRequests()
         XCTAssertEqual(second.status, .applied)
         XCTAssertEqual(requests, [["org.a"], [], ["org.a", "org.b"]])
@@ -176,9 +220,9 @@ final class LayoutCoordinatorTests: XCTestCase {
         let coordinator = LayoutCoordinator(backend: backend)
         let initial = try ItemRegistry.reconcile([bluetooth], with: LayoutDocument())
         let hidden = try LayoutEditor.move(initial.items[0].id, to: .hidden, at: 0, in: initial.layout)
-        _ = await coordinator.apply(hidden, allowReordering: false)
+        _ = await coordinator.apply(hidden, allowReordering: false, intent: .userSettings)
         let second = await coordinator.apply(hidden, allowReordering: false,
-                                             currentVisibilityLayout: hidden)
+                                             currentVisibilityLayout: hidden, intent: .userSettings)
         let requests = await backend.visibilityRequests()
         XCTAssertEqual(second.status, .applied)
         XCTAssertEqual(requests, [["system-item:1"]])
@@ -190,7 +234,7 @@ final class LayoutCoordinatorTests: XCTestCase {
         let backend = FakeLayoutBackend([bluetooth])
         let initial = try ItemRegistry.reconcile([bluetooth], with: LayoutDocument())
         let hidden = try LayoutEditor.move(initial.items[0].id, to: .hidden, at: 0, in: initial.layout)
-        let report = await LayoutCoordinator(backend: backend).apply(hidden, allowReordering: false)
+        let report = await LayoutCoordinator(backend: backend).apply(hidden, allowReordering: false, intent: .userSettings)
         let requests = await backend.visibilityRequests()
         XCTAssertEqual(report.status, .applied)
         XCTAssertTrue(report.visibilityApplied)
@@ -208,7 +252,7 @@ final class LayoutCoordinatorTests: XCTestCase {
         let withSystemHidden = try LayoutEditor.move(initial.items[0].id, to: .hidden, at: 0, in: initial.layout)
         let saved = try LayoutEditor.move(initial.items[1].id, to: .hidden, at: 1, in: withSystemHidden)
 
-        let report = await LayoutCoordinator(backend: backend).apply(saved, allowReordering: false)
+        let report = await LayoutCoordinator(backend: backend).apply(saved, allowReordering: false, intent: .userSettings)
 
         XCTAssertEqual(report.status, .applied)
         XCTAssertTrue(report.visibilityApplied)
@@ -222,7 +266,7 @@ final class LayoutCoordinatorTests: XCTestCase {
         let backend = FakeLayoutBackend([d, b, c, a])
         let coordinator = LayoutCoordinator(backend: backend)
         let requested = document([a, b, c, d], hidden: ["c", "d"])
-        let report = await coordinator.apply(requested)
+        let report = await coordinator.apply(requested, intent: .userSettings)
         XCTAssertEqual(report.status, .applied)
         XCTAssertEqual(report.movedCount, 2)
         let order = await backend.observedIDs()
@@ -237,7 +281,7 @@ final class LayoutCoordinatorTests: XCTestCase {
         await backend.omitHiddenFromDiscovery()
         let saved = document([a, b, c], hidden: ["b"])
 
-        let report = await LayoutCoordinator(backend: backend).restoreSavedLayout(saved)
+        let report = await LayoutCoordinator(backend: backend).restoreSavedLayout(saved, intent: .userSettings)
         let order = await backend.observedIDs()
         let visibility = await backend.visibilityRequests()
 
@@ -252,7 +296,7 @@ final class LayoutCoordinatorTests: XCTestCase {
         await backend.configure(failMoveAt: 1)
         let saved = document([a, b, c], hidden: ["b"])
 
-        let report = await LayoutCoordinator(backend: backend).restoreSavedLayout(saved)
+        let report = await LayoutCoordinator(backend: backend).restoreSavedLayout(saved, intent: .userSettings)
         let visibility = await backend.visibilityRequests()
 
         XCTAssertEqual(report.status, .partial)
@@ -264,7 +308,7 @@ final class LayoutCoordinatorTests: XCTestCase {
         let a = item("a"), b = item("b"), c = item("c"), d = item("d")
         let backend = FakeLayoutBackend([a, b, c, d])
         let desired = document([b, c, d, a])
-        let report = await LayoutCoordinator(backend: backend).apply(desired)
+        let report = await LayoutCoordinator(backend: backend).apply(desired, intent: .userSettings)
         XCTAssertEqual(report.status, .applied)
         XCTAssertEqual(report.movedCount, 1)
         XCTAssertEqual(report.observedOrder, desired.entries.map(\.id))
@@ -276,7 +320,7 @@ final class LayoutCoordinatorTests: XCTestCase {
         let a = item("a"), b = item("b"), c = item("c")
         let backend = FakeLayoutBackend([a, b, c])
         await backend.configure(ignoreMoves: true)
-        let report = await LayoutCoordinator(backend: backend).apply(document([b, c, a]))
+        let report = await LayoutCoordinator(backend: backend).apply(document([b, c, a]), intent: .userSettings)
         XCTAssertEqual(report.status, .partial)
         XCTAssertEqual(report.movedCount, 1)
         XCTAssertNotNil(report.error)
@@ -291,7 +335,7 @@ final class LayoutCoordinatorTests: XCTestCase {
         let a = item("a"), b = item("b"), c = item("c")
         let backend = FakeLayoutBackend([b, a, c])
         let desired = document([a, b, c], hidden: ["c"])
-        let report = await LayoutCoordinator(backend: backend).apply(desired, allowReordering: false)
+        let report = await LayoutCoordinator(backend: backend).apply(desired, allowReordering: false, intent: .userSettings)
         XCTAssertEqual(report.status, .applied)
         XCTAssertNil(report.error)
         XCTAssertEqual(report.movedCount, 0)
@@ -305,7 +349,7 @@ final class LayoutCoordinatorTests: XCTestCase {
     func testDisabledReorderingDoesNotClaimAnAlreadyMatchingOrderIsDeferred() async {
         let a = item("a"), b = item("b")
         let backend = FakeLayoutBackend([a, b])
-        let report = await LayoutCoordinator(backend: backend).apply(document([a, b]), allowReordering: false)
+        let report = await LayoutCoordinator(backend: backend).apply(document([a, b]), allowReordering: false, intent: .userSettings)
         XCTAssertEqual(report.status, .applied)
         XCTAssertNil(report.error)
         XCTAssertTrue(report.deferredIDs.isEmpty)
@@ -317,10 +361,10 @@ final class LayoutCoordinatorTests: XCTestCase {
         let a = item("a"), b = item("b")
         let backend = FakeLayoutBackend([b, a])
         await backend.configure(ignoreMoves: true)
-        let report = await LayoutCoordinator(backend: backend).apply(document([a, b], hidden: ["a"]))
+        let report = await LayoutCoordinator(backend: backend).apply(document([a, b], hidden: ["a"]), intent: .userSettings)
         // Different groups need no move; exercise same-group order explicitly.
         XCTAssertEqual(report.status, .applied)
-        let failed = await LayoutCoordinator(backend: backend).apply(document([a, b]))
+        let failed = await LayoutCoordinator(backend: backend).apply(document([a, b]), intent: .userSettings)
         XCTAssertEqual(failed.status, .partial)
         XCTAssertNotNil(failed.error)
         let moves = await backend.moveCount()
@@ -333,7 +377,7 @@ final class LayoutCoordinatorTests: XCTestCase {
         let a = item("a"), b = item("b"), c = item("c")
         let backend = FakeLayoutBackend([c, b, a])
         await backend.configure(failMoveAt: 2)
-        let report = await LayoutCoordinator(backend: backend).apply(document([a, b, c]))
+        let report = await LayoutCoordinator(backend: backend).apply(document([a, b, c]), intent: .userSettings)
         XCTAssertEqual(report.status, .partial)
         XCTAssertEqual(report.movedCount, 1)
         XCTAssertNotNil(report.error)
@@ -348,7 +392,7 @@ final class LayoutCoordinatorTests: XCTestCase {
         await backend.configure(ignoreMoves: true)
         await backend.omitHiddenFromDiscovery()
         let report = await LayoutCoordinator(backend: backend)
-            .apply(document([b, a, c], hidden: ["c"]))
+            .apply(document([b, a, c], hidden: ["c"]), intent: .userSettings)
         XCTAssertEqual(report.status, .partial)
         XCTAssertTrue(report.visibilityApplied)
         let requests = await backend.visibilityRequests()
@@ -360,7 +404,7 @@ final class LayoutCoordinatorTests: XCTestCase {
         let other = item("other")
         let backend = FakeLayoutBackend([other, fallback])
         let desired = document([fallback, other])
-        let report = await LayoutCoordinator(backend: backend).apply(desired)
+        let report = await LayoutCoordinator(backend: backend).apply(desired, intent: .userSettings)
         XCTAssertEqual(report.status, .applied)
         XCTAssertEqual(report.movedCount, 1)
         XCTAssertTrue(report.deferredIDs.isEmpty)
@@ -376,7 +420,7 @@ final class LayoutCoordinatorTests: XCTestCase {
         let unsupported = DiscoveredItem(bundleID: "org.unsupported", identifier: "u", name: "u", isSupported: false)
         let desired = document([overflow, duplicate, fallback, system, unsupported, item("absent")])
         let backend = FakeLayoutBackend([system, duplicate, unsupported, fallback, fallback, duplicate, overflow])
-        let report = await LayoutCoordinator(backend: backend).apply(desired)
+        let report = await LayoutCoordinator(backend: backend).apply(desired, intent: .userSettings)
         XCTAssertEqual(report.status, .partial)
         XCTAssertEqual(Set(report.deferredIDs), Set(desired.entries.map(\.id)))
         let count = await backend.moveCount()
@@ -387,7 +431,7 @@ final class LayoutCoordinatorTests: XCTestCase {
         let a = item("a")
         let backend = FakeLayoutBackend([a])
         await backend.omitHiddenFromDiscovery()
-        let report = await LayoutCoordinator(backend: backend).apply(document([a], hidden: ["a"]))
+        let report = await LayoutCoordinator(backend: backend).apply(document([a], hidden: ["a"]), intent: .userSettings)
         XCTAssertEqual(report.status, .applied)
         XCTAssertTrue(report.deferredIDs.isEmpty)
         XCTAssertTrue(report.observedOrder.isEmpty)
@@ -404,7 +448,7 @@ final class LayoutCoordinatorTests: XCTestCase {
             LayoutEntry(id: ItemRegistry.observationID(app)!, bundleID: "org.app", name: "app"),
             LayoutEntry(id: ItemRegistry.timeMachinePositionID, bundleID: "com.apple.systemuiserver", name: "Time Machine")
         ])
-        let report = await LayoutCoordinator(backend: backend).apply(document)
+        let report = await LayoutCoordinator(backend: backend).apply(document, intent: .userSettings)
         XCTAssertEqual(report.status, .applied)
         XCTAssertEqual(report.movedCount, 1)
         let observed = await backend.observedIDs()
@@ -418,7 +462,7 @@ final class LayoutCoordinatorTests: XCTestCase {
         await backend.omitHiddenFromDiscovery()
         let initial = try ItemRegistry.reconcile([timeMachine], with: LayoutDocument())
         let hidden = try LayoutEditor.move(ItemRegistry.timeMachinePositionID, to: .hidden, at: 0, in: initial.layout)
-        let report = await LayoutCoordinator(backend: backend).apply(hidden, allowReordering: false)
+        let report = await LayoutCoordinator(backend: backend).apply(hidden, allowReordering: false, intent: .userSettings)
         XCTAssertEqual(report.status, .applied)
         XCTAssertTrue(report.visibilityApplied)
         let requests = await backend.visibilityRequests()
@@ -432,7 +476,7 @@ final class LayoutCoordinatorTests: XCTestCase {
         await backend.omitHiddenStartingWithDiscovery(3)
         let initial = try ItemRegistry.reconcile([timeMachine], with: LayoutDocument())
         let hidden = try LayoutEditor.move(ItemRegistry.timeMachinePositionID, to: .hidden, at: 0, in: initial.layout)
-        let report = await LayoutCoordinator(backend: backend).apply(hidden, allowReordering: false)
+        let report = await LayoutCoordinator(backend: backend).apply(hidden, allowReordering: false, intent: .userSettings)
         XCTAssertEqual(report.status, .applied)
         let requests = await backend.visibilityRequests()
         XCTAssertEqual(requests, [["legacy-extra:com.apple.menuextra.TimeMachine"]])
@@ -448,7 +492,7 @@ final class LayoutCoordinatorTests: XCTestCase {
             to: .hidden, at: 0, in: initial.layout)
         let hidden = try LayoutEditor.move(ItemRegistry.observationID(grammarly)!,
             to: .hidden, at: 1, in: withTimeMachineHidden)
-        let report = await LayoutCoordinator(backend: backend).apply(hidden, allowReordering: false)
+        let report = await LayoutCoordinator(backend: backend).apply(hidden, allowReordering: false, intent: .userSettings)
         XCTAssertEqual(report.status, .applied)
         XCTAssertTrue(report.visibilityApplied)
         let requests = await backend.visibilityRequests()
@@ -468,7 +512,7 @@ final class LayoutCoordinatorTests: XCTestCase {
         let initial = try ItemRegistry.reconcile([timeMachine, vpn, siri], with: LayoutDocument())
         let hidden = try LayoutEditor.move(ItemRegistry.timeMachinePositionID,
             to: .hidden, at: 0, in: initial.layout)
-        let report = await LayoutCoordinator(backend: backend).apply(hidden, allowReordering: false)
+        let report = await LayoutCoordinator(backend: backend).apply(hidden, allowReordering: false, intent: .userSettings)
         XCTAssertEqual(report.status, .applied)
         let requests = await backend.visibilityRequests()
         XCTAssertEqual(requests, [["legacy-extra:com.apple.menuextra.TimeMachine"]])
@@ -478,7 +522,7 @@ final class LayoutCoordinatorTests: XCTestCase {
         let a = item("a")
         let backend = FakeLayoutBackend([a])
         await backend.addOnDiscovery(2, items: [DiscoveredItem(bundleID: nil, identifier: nil, name: "unknown")])
-        let report = await LayoutCoordinator(backend: backend).apply(document([a], hidden: ["a"]))
+        let report = await LayoutCoordinator(backend: backend).apply(document([a], hidden: ["a"]), intent: .userSettings)
         XCTAssertEqual(report.status, .applied)
         XCTAssertEqual(report.snapshot?.unknownOwnerCount, 1)
         let requests = await backend.visibilityRequests()
@@ -490,43 +534,43 @@ final class LayoutCoordinatorTests: XCTestCase {
         let unknown = DiscoveredItem(bundleID: nil, identifier: nil, name: "unknown")
         let backend = FakeLayoutBackend([a, unknown])
         let report = await LayoutCoordinator(backend: backend)
-            .apply(document([a], hidden: ["a"]), allowReordering: false)
+            .apply(document([a], hidden: ["a"]), allowReordering: false, intent: .userSettings)
         XCTAssertEqual(report.status, .applied)
         XCTAssertTrue(report.visibilityApplied)
         let requests = await backend.visibilityRequests()
         XCTAssertEqual(requests, [["org.a"]])
     }
 
-    func testEligibilityChangeKeepsOtherHiddenApplicationActive() async {
+    func testEligibilityChangePreservesEveryAcceptedHiddenTarget() async {
         let a = item("a"), b = item("b")
         let backend = FakeLayoutBackend([a, b])
         await backend.addOnDiscovery(2, items: [a])
 
         let report = await LayoutCoordinator(backend: backend)
-            .apply(document([a, b], hidden: ["a", "b"]), allowReordering: false)
+            .apply(document([a, b], hidden: ["a", "b"]), allowReordering: false, intent: .userSettings)
 
         XCTAssertEqual(report.status, .partial)
         XCTAssertTrue(report.visibilityApplied)
         let requests = await backend.visibilityRequests()
-        XCTAssertEqual(requests, [["org.a", "org.b"], ["org.b"]])
+        XCTAssertEqual(requests, [["org.a", "org.b"]])
     }
 
-    func testAmbiguousSiblingAfterMoveImmediatelyRevealsAndStops() async {
+    func testAmbiguousSiblingAfterMovePreservesFilterAndStops() async {
         let a = item("a"), b = item("b")
         let backend = FakeLayoutBackend([b, a])
         await backend.addOnDiscovery(3, items: [a])
-        let report = await LayoutCoordinator(backend: backend).apply(document([a, b], hidden: ["a", "b"]))
+        let report = await LayoutCoordinator(backend: backend).apply(document([a, b], hidden: ["a", "b"]), intent: .userSettings)
         XCTAssertEqual(report.status, .partial)
         XCTAssertEqual(report.movedCount, 1)
         XCTAssertEqual(report.observedOrder, document([a, b, a]).entries.map(\.id))
         let requests = await backend.visibilityRequests()
-        XCTAssertEqual(requests, [["org.a", "org.b"], ["org.b"]])
+        XCTAssertEqual(requests, [["org.a", "org.b"]])
     }
 
     func testVisibilityFailureIsReportedWithoutRequestingReveal() async {
         let backend = FakeLayoutBackend([item("a")])
         await backend.configure(failVisibility: true)
-        let report = await LayoutCoordinator(backend: backend).apply(document([item("a")], hidden: ["a"]))
+        let report = await LayoutCoordinator(backend: backend).apply(document([item("a")], hidden: ["a"]), intent: .userSettings)
         XCTAssertEqual(report.status, .failed)
         XCTAssertNotNil(report.error)
         XCTAssertNil(report.fallbackError)
@@ -540,7 +584,7 @@ final class LayoutCoordinatorTests: XCTestCase {
         await backend.failDiscoveries([2, 3])
 
         let report = await LayoutCoordinator(backend: backend)
-            .apply(document([a], hidden: ["a"]), allowReordering: false)
+            .apply(document([a], hidden: ["a"]), allowReordering: false, intent: .userSettings)
 
         XCTAssertEqual(report.status, .failed)
         XCTAssertNotNil(report.error)
@@ -557,10 +601,10 @@ final class LayoutCoordinatorTests: XCTestCase {
         let backend = FakeLayoutBackend([a])
         await backend.omitHiddenFromDiscovery()
         let coordinator = LayoutCoordinator(backend: backend)
-        _ = await coordinator.apply(layout, allowReordering: false)
+        _ = await coordinator.apply(layout, allowReordering: false, intent: .userSettings)
         await backend.configure(failVisibility: true)
 
-        let report = await coordinator.apply(document([a]), revealed: true, allowReordering: false)
+        let report = await coordinator.apply(document([a]), revealed: true, allowReordering: false, intent: .userSettings)
 
         XCTAssertEqual(report.status, .failed)
         let active = await backend.hasActiveVisibilityRestriction()
@@ -582,7 +626,7 @@ final class LayoutCoordinatorTests: XCTestCase {
         let backend = FakeLayoutBackend([app, bluetooth])
         await backend.failDiscoveries([3])
 
-        let report = await LayoutCoordinator(backend: backend).apply(layout, allowReordering: false)
+        let report = await LayoutCoordinator(backend: backend).apply(layout, allowReordering: false, intent: .userSettings)
 
         XCTAssertEqual(report.status, .failed)
         XCTAssertTrue(report.visibilityApplied)
@@ -598,9 +642,9 @@ final class LayoutCoordinatorTests: XCTestCase {
         await backend.failDiscoveries([2, 3, 4])
         let coordinator = LayoutCoordinator(backend: backend)
 
-        let first = await coordinator.apply(layout, allowReordering: false)
-        let refresh = await coordinator.apply(layout, allowReordering: false, currentVisibilityLayout: layout)
-        let recovered = await coordinator.apply(layout, allowReordering: false, currentVisibilityLayout: layout)
+        let first = await coordinator.apply(layout, allowReordering: false, intent: .userSettings)
+        let refresh = await coordinator.apply(layout, allowReordering: false, currentVisibilityLayout: layout, intent: .userSettings)
+        let recovered = await coordinator.apply(layout, allowReordering: false, currentVisibilityLayout: layout, intent: .userSettings)
 
         XCTAssertTrue(first.visibilityApplied)
         XCTAssertTrue(refresh.visibilityApplied)
@@ -614,9 +658,9 @@ final class LayoutCoordinatorTests: XCTestCase {
         let backend = FakeLayoutBackend([b, a])
         await backend.configure(block: true)
         let coordinator = LayoutCoordinator(backend: backend)
-        let first = Task { await coordinator.apply(document([a, b], hidden: ["a", "b"])) }
+        let first = Task { await coordinator.apply(document([a, b], hidden: ["a", "b"]), intent: .userSettings) }
         await backend.waitUntilBlocked()
-        let latest = Task { await coordinator.apply(document([b, a]), revealed: true) }
+        let latest = Task { await coordinator.apply(document([b, a]), revealed: true, intent: .userSettings) }
         // Wait for the actor to enqueue the latest request before releasing the
         // first operation; no sleeps or wall-clock race assumptions.
         while await coordinator.requestGeneration < 2 { await Task.yield() }
@@ -636,7 +680,7 @@ final class LayoutCoordinatorTests: XCTestCase {
         let backend = FakeLayoutBackend([b, a])
         await backend.configure(block: true)
         let coordinator = LayoutCoordinator(backend: backend)
-        let applying = Task { await coordinator.apply(document([a, b])) }
+        let applying = Task { await coordinator.apply(document([a, b]), intent: .userSettings) }
         await backend.waitUntilBlocked()
         let cancelling = Task { await coordinator.cancelPending() }
         while await coordinator.requestGeneration < 2 { await Task.yield() }
@@ -651,7 +695,7 @@ final class LayoutCoordinatorTests: XCTestCase {
     func testRevealedLayoutDiscoversOnlyAfterApplyingVisibility() async {
         let a = item("a"), b = item("b")
         let backend = FakeLayoutBackend([a, b])
-        let report = await LayoutCoordinator(backend: backend).apply(document([a, b], hidden: ["a"]), revealed: true)
+        let report = await LayoutCoordinator(backend: backend).apply(document([a, b], hidden: ["a"]), revealed: true, intent: .userSettings)
         XCTAssertEqual(report.status, .applied)
         XCTAssertEqual(report.observedOrder, document([a, b]).entries.map(\.id))
         let events = await backend.operationEvents()

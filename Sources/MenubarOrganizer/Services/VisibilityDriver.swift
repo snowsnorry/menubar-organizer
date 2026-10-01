@@ -18,8 +18,8 @@ final class VisibilityDriver {
         case allocationFailed
         case activationFailed(String)
         case activationTimedOut
+        case userActionRequired
         case superseded
-        case inventoryChanged
 
         var errorDescription: String? {
             switch self {
@@ -31,8 +31,8 @@ final class VisibilityDriver {
             case .allocationFailed: "The menu bar visibility request could not be created."
             case .activationFailed(let message): "The menu bar visibility request failed: \(message)"
             case .activationTimedOut: "The menu bar service did not respond in time."
+            case .userActionRequired: "Changing an active visibility filter requires a user action."
             case .superseded: "A newer visibility request replaced this request."
-            case .inventoryChanged: "The running applications changed; hidden items were requested to be revealed."
             }
         }
     }
@@ -43,8 +43,7 @@ final class VisibilityDriver {
     private(set) var legacyWarnings: [VisibilityWarning] = []
     var isActive: Bool { assessmentActive || legacyExtras.isActive }
     var discoveryRemovedLegacyExtraIDs: Set<String> { legacyExtras.discoveryRemovedExtraIDs }
-    /// Called when an active or pending request is invalidated by an error or
-    /// application inventory change. The model must clear its hidden-state UI.
+    /// Called when an active or pending request is invalidated by a backend error.
     var onInvalidated: (@MainActor (DriverError) -> Void)?
 
     private var runtime: Runtime?
@@ -54,7 +53,6 @@ final class VisibilityDriver {
     private var requestID: UUID?
     private var observers: [NSObjectProtocol] = []
     private var sessionBundles: Set<String> = []
-    private var launchInvalidationTask: Task<Void, Never>?
 
     init(legacyExtras: SystemUIServerExtras = SystemUIServerExtras(),
          assessmentApply: (@MainActor (Set<String>) async throws -> Void)? = nil,
@@ -67,16 +65,13 @@ final class VisibilityDriver {
         ) { [weak self] notification in
             let launched = (notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.bundleIdentifier
             MainActor.assumeIsolated {
-                guard let self, self.session != nil else { return }
+                guard let self, self.isActive || self.session != nil else { return }
                 guard let launched, self.sessionBundles.contains(launched) else {
-                    self.launchInvalidationTask?.cancel()
-                    self.launchInvalidationTask = Task { [weak self] in
-                        do { try await Task.sleep(for: .milliseconds(350)) } catch { return }
-                        guard let self, !Task.isCancelled, self.session != nil else { return }
-                        Logger(subsystem: "local.menubarorganizer.app", category: "visibility")
-                            .notice("Visibility filter released after application launch burst")
-                        self.invalidate(reason: .inventoryChanged)
-                    }
+                    // The private API cannot update an allow-list in place.
+                    // Releasing it here flashes every hidden icon and restores
+                    // legacy extras. Defer inventory changes until a user request.
+                    Logger(subsystem: "local.menubarorganizer.app", category: "visibility")
+                        .notice("Application launch observed; preserving visibility filter; bundle=\(launched ?? "unknown", privacy: .public)")
                     return
                 }
             }
@@ -90,7 +85,14 @@ final class VisibilityDriver {
         for observer in observers { NSWorkspace.shared.notificationCenter.removeObserver(observer) }
     }
 
-    func setHiddenApplications(_ targets: Set<String>) async throws {
+    func setHiddenApplications(_ targets: Set<String>, intent: VisibilityRequestIntent = .automatic) async throws {
+        guard intent.permitsRelease || (!isActive && session == nil) else {
+            Logger(subsystem: "local.menubarorganizer.app", category: "visibility")
+                .notice("Automatic visibility mutation blocked; accepted filter preserved")
+            throw DriverError.userActionRequired
+        }
+        Logger(subsystem: "local.menubarorganizer.app", category: "visibility")
+            .notice("Visibility request; intent=\(String(describing: intent), privacy: .public); targets=\(targets.count, privacy: .public)")
         let legacy = Set(targets.filter { $0.hasPrefix(ItemRegistry.legacyExtraTargetPrefix) })
         let ids = Set(legacy.map { String($0.dropFirst(ItemRegistry.legacyExtraTargetPrefix.count)) })
         guard ids.isSubset(of: ItemRegistry.legacyExtraBundleIDs) else {
@@ -204,7 +206,7 @@ final class VisibilityDriver {
             }
         } onCancel: { [weak self] in
             Task { @MainActor in
-                guard let self, self.requestID == id else { return }
+                guard let self, self.requestID == id, self.pending != nil else { return }
                 self.invalidate(reason: nil, completionError: CancellationError())
             }
         }
@@ -216,14 +218,13 @@ final class VisibilityDriver {
     /// Launch must not reconcile a partial inventory after failed recovery.
     func recoverLegacyExtras() async throws { try await legacyExtras.restoreAll() }
 
-    func revealAll() async throws { try await setHiddenApplications([]) }
+    func revealAll(intent: VisibilityRequestIntent) async throws { try await setHiddenApplications([], intent: intent) }
 
     /// AppDelegate must invoke this from applicationWillTerminate even if the
     /// settings window is closed. SIGKILL cannot execute app-level cleanup.
     func invalidateForTermination() { invalidate(reason: nil); legacyExtras.restoreBestEffort() }
 
     private func invalidate(reason: DriverError?, completionError: (any Error)? = nil) {
-        launchInvalidationTask?.cancel(); launchInvalidationTask = nil
         requestID = nil
         sessionBundles = []
         timeout?.cancel(); timeout = nil
@@ -233,8 +234,7 @@ final class VisibilityDriver {
         old?.invalidate()
         continuation?.resume(throwing: completionError ?? reason ?? .superseded)
         if let reason {
-            legacyExtras.restoreBestEffort()
-            if old != nil || legacyExtras.isActive { onInvalidated?(reason) }
+            if old != nil { onInvalidated?(reason) }
         }
     }
 

@@ -385,7 +385,7 @@ final class SystemUIServerExtrasTests: XCTestCase {
         XCTAssertEqual(host.rows, ItemRegistry.legacyExtraBundleIDs)
         XCTAssertEqual(invalidations, 0)
 
-        try await driver.revealAll()
+        try await driver.revealAll(intent: .userToggle)
         XCTAssertFalse(driver.isActive)
         XCTAssertTrue(driver.legacyWarnings.isEmpty)
         try await driver.setHiddenApplications(targets)
@@ -409,9 +409,33 @@ final class SystemUIServerExtrasTests: XCTestCase {
         XCTAssertEqual(driver.legacyWarnings.first?.reason, "legacyExtraRecoveryFailed")
         XCTAssertTrue(backend.removed.contains(vpn))
         host.addStatus = 0
-        try await driver.revealAll()
+        try await driver.revealAll(intent: .userToggle)
         XCTAssertFalse(driver.isActive)
         XCTAssertEqual(host.rows, ItemRegistry.legacyExtraBundleIDs)
+    }
+
+    func testAutomaticRequestsCannotReleaseOrReplaceAcceptedFilterOrRestoreLegacyExtras() async throws {
+        let host = Host()
+        var assessmentRequests: [Set<String>] = []
+        let driver = VisibilityDriver(legacyExtras: host.makeBackend(), assessmentApply: {
+            assessmentRequests.append($0)
+        }, observeApplications: false)
+        let targets: Set<String> = ["org.example.hidden", ItemRegistry.legacyExtraTargetPrefix + vpn]
+        try await driver.setHiddenApplications(targets)
+        for request: Set<String> in [[], targets, ["org.other.hidden"]] {
+            do {
+                try await driver.setHiddenApplications(request, intent: .automatic)
+                XCTFail("Automatic mutation must be rejected")
+            } catch VisibilityDriver.DriverError.userActionRequired {}
+            XCTAssertTrue(driver.isActive)
+            XCTAssertEqual(assessmentRequests, [["org.example.hidden"]])
+            XCTAssertTrue(host.addCalls.isEmpty)
+            XCTAssertFalse(host.rows.contains(vpn))
+        }
+        try await driver.revealAll(intent: .userToggle)
+        XCTAssertFalse(driver.isActive)
+        XCTAssertEqual(assessmentRequests, [["org.example.hidden"], []])
+        XCTAssertEqual(host.addCalls, [vpn])
     }
 
     func testAssessmentFailureStillPropagatesWithoutAttemptingLegacyRemoval() async {

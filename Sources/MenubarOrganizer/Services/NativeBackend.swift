@@ -85,7 +85,7 @@ final class NativeBackend: LayoutBackend {
         cancelGestures()
         if let tail { _ = try? await tail.value }
         positionStore.closeAccess()
-        try? await visibility.revealAll()
+        try? await visibility.revealAll(intent: .termination)
         visibility.invalidateForTermination()
     }
 
@@ -132,9 +132,10 @@ final class NativeBackend: LayoutBackend {
 
     func hasActiveVisibilityRestriction() async -> Bool { visibility.isActive }
 
-    /// The current assertion still covers the same running processes.
+    /// An accepted restriction stays usable across process inventory changes.
+    /// Rebuilding it requires a visible release, so defer that until user intent.
     func hasCurrentHiddenAssertion() -> Bool {
-        visibility.isActive && !hiddenApplications.isEmpty && hiddenFingerprint == fingerprint
+        visibility.isActive && !hiddenApplications.isEmpty
     }
 
     /// The exact targets of the assertion we just released are safe to reuse
@@ -145,7 +146,7 @@ final class NativeBackend: LayoutBackend {
         return recentlyRevealedApplications
     }
 
-    func setHiddenApplications(_ bundleIDs: Set<String>) async throws {
+    func setHiddenApplications(_ bundleIDs: Set<String>, intent: VisibilityRequestIntent = .automatic) async throws {
         try await serialize {
             guard !self.stopped || bundleIDs.isEmpty else { throw CancellationError() }
             try Task.checkCancellation()
@@ -156,7 +157,7 @@ final class NativeBackend: LayoutBackend {
             let previousHidden = self.hiddenApplications
             let previousFingerprint = self.hiddenFingerprint
             do {
-                try await self.visibility.setHiddenApplications(bundleIDs)
+                try await self.visibility.setHiddenApplications(bundleIDs, intent: intent)
                 // Reapplying even the same nonempty set replaces an assertion.
                 if !bundleIDs.isEmpty || wasActive || self.hiddenApplications != bundleIDs {
                     self.invalidateInventory()

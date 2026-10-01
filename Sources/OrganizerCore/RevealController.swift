@@ -43,6 +43,7 @@ public struct RevealController: Sendable {
     /// toggle cancels that request; hovering alone does not defer a user toggle.
     public private(set) var pendingCollapse = false
     private var generation: UInt64 = 0
+    private var stateBeforeSuspension: State?
 
     /// Initialization emits no effects and does not assert actual visibility.
     /// Delays outside 1...60 seconds (including nonfinite values) use the default.
@@ -135,26 +136,21 @@ public struct RevealController: Sendable {
         return cancelTimer() + [.hideHidden]
     }
 
-    /// Best-effort fail-open request, even if the backend cannot acknowledge it.
-    /// No timeout can re-hide items until the owner explicitly resumes.
+    /// Pause interaction/timers without issuing any visibility command.
     public mutating func suspend(reason: SuspensionReason) -> [Effect] {
+        if case .suspended = state {} else { stateBeforeSuspension = state }
         pendingCollapse = false
         state = .suspended(reason)
-        return cancelTimer() + [.showHidden]
+        return cancelTimer()
     }
 
     /// Call only after permissions/backend/lifecycle are usable again.
     /// Preserve interaction flags; an open menu still prevents a timer.
     public mutating func resume(now: Double) -> [Effect] {
-        guard case .suspended(let reason) = state else { return [] }
-        // A lifecycle refresh always reapplies the saved layout. Restore its
-        // collapsed policy immediately unless a menu is still being used.
-        if reason == .lifecycle, !isMenuOpen {
-            state = .collapsed
-            return []
-        }
-        state = .revealed
-        return [.showHidden] + restartTimer(now: now)
+        guard case .suspended = state else { return [] }
+        state = stateBeforeSuspension ?? .collapsed
+        stateBeforeSuspension = nil
+        return state == .revealed ? restartTimer(now: now) : []
     }
 
     /// A saved-layout refresh reapplies visibility itself. Restore the
