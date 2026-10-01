@@ -6,6 +6,8 @@ import OrganizerCore
 final class OrganizerAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
     private var model: SettingsModel!
     private var statusItem: NSStatusItem!
+    private var lastIconCollapsed: Bool?
+    private var pendingIconCollapsed: Bool?
     private var window: NSWindow?
     private var pulse: Timer?
     private var monitor: Any?
@@ -68,11 +70,11 @@ final class OrganizerAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegat
         statusItem.autosaveName = "MenubarOrganizerControl"
         if let button = statusItem.button {
             button.setAccessibilityIdentifier("local.menubarorganizer.control")
-            button.image = NSImage(systemSymbolName: "ellipsis", accessibilityDescription: L10n.text("menu.showHidden"))
             button.target = self; button.action = #selector(statusClicked)
             button.sendAction(on: [.leftMouseUp, .rightMouseUp])
             button.toolTip = "Menubar Organizer"
         }
+        updateStatusIcon()
         lastScreenConfiguration = screenConfiguration()
         installLifecycle()
         monitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
@@ -105,7 +107,7 @@ final class OrganizerAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegat
             }
         }
         RunLoop.main.add(pulse!, forMode: .common)
-        Task { await model.start(); openSettings() }
+        Task { await model.start(); updateStatusIcon(); openSettings() }
     }
 
     @objc private func statusClicked() {
@@ -126,8 +128,29 @@ final class OrganizerAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegat
     }
 
     @objc private func toggleHidden() {
+        guard model.canToggleHidden, pendingIconCollapsed == nil else { return }
+        // Keep the immediate click feedback until the entire operation finishes;
+        // interaction polling must not replace it with the old backend state.
+        pendingIconCollapsed = !model.backend.visibility.isActive
+        updateStatusIcon()
+        statusItem.button?.displayIfNeeded()
         menuInteraction = false
-        Task { await updateInteraction(); await model.toggle() }
+        Task {
+            defer {
+                pendingIconCollapsed = nil
+                updateStatusIcon()
+            }
+            await updateInteraction()
+            await model.toggle()
+        }
+    }
+
+    private func updateStatusIcon() {
+        let collapsed = pendingIconCollapsed ?? model.backend.visibility.isActive
+        guard collapsed != lastIconCollapsed, let button = statusItem.button else { return }
+        lastIconCollapsed = collapsed
+        button.image = collapsed ? MenuBarControlIcon.collapsed : MenuBarControlIcon.expanded
+        button.setAccessibilityLabel(L10n.text(collapsed ? "menu.showHidden" : "menu.hideHidden"))
     }
 
     @objc func openSettings() {
@@ -176,6 +199,7 @@ final class OrganizerAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegat
     }
 
     private func updateInteraction() async {
+        defer { updateStatusIcon() }
         guard model != nil, !terminating, !lifecycleInactive else { return }
         let pointer = NSEvent.mouseLocation
         let pointerInside = pointerInMenuBar()

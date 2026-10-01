@@ -129,7 +129,7 @@ final class SettingsModel {
 
     func icon(for item: RegistryItem) -> NSImage? {
         if item.entry.bundleID == ItemRegistry.organizerBundleID {
-            return NSImage(systemSymbolName: "ellipsis", accessibilityDescription: nil)
+            return MenuBarControlIcon.collapsed
         }
         if item.entry.bundleID.hasPrefix("com.apple.") {
             let symbol = SystemMenuItemKind.symbol(forPositionID: item.id) ??
@@ -797,8 +797,10 @@ final class SettingsModel {
         statusMessage = L10n.text("status.unsaved")
     }
 
+    var canToggleHidden: Bool { loaded && !stopped && !isBusy && !isPreview }
+
     func toggle() async {
-        guard loaded, !stopped, !isBusy, !isPreview else { return }
+        guard canToggleHidden else { return }
         // The visibility assertion can be released over sleep while the policy
         // still says collapsed. In that case the control means "hide now".
         if reveal.state != .revealed, !backend.visibility.isActive,
