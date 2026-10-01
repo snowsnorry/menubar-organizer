@@ -35,7 +35,7 @@ public enum LayoutApplyStatus: Equatable, Sendable {
 
 public struct LayoutApplyReport: Sendable {
     public var status: LayoutApplyStatus
-    /// Visibility was accepted and passed the safety checks, even if ordering failed.
+    /// Visibility was accepted, even if later discovery or ordering failed.
     public var visibilityApplied: Bool
     /// Latest observed inventory, not proof of visibility from the backend.
     public var snapshot: RegistrySnapshot?
@@ -201,6 +201,9 @@ public actor LayoutCoordinator {
                 hidden = ItemRegistry.eligibleHiddenApplications(in: beforeSnapshot)
             }
             try await backend.setHiddenApplications(hidden)
+            // A later inventory read cannot undo an acknowledged visibility
+            // request. Record it before any diagnostic work can throw.
+            report.visibilityApplied = true
             report.visibilityWarnings = await backend.visibilityWarnings()
             guard token == generation else { return report }
             var observations = try await backend.discover()
@@ -318,13 +321,8 @@ public actor LayoutCoordinator {
             report.status = report.movedCount > 0 ? .partial : .failed
             report.error = error is VerificationFailure
                 ? "reorderVerificationFailed" : String(describing: error)
-            if !report.visibilityApplied {
-                do {
-                    try await backend.setHiddenApplications([])
-                } catch {
-                    report.fallbackError = String(describing: error)
-                }
-            }
+            // Errors report the failed operation; they do not request a reveal.
+            // The driver keeps any previous assertion when preflight fails.
             guard token == generation else { report.status = .superseded; return report }
             // Capture actual state without issuing any more moves.
             do {

@@ -14,6 +14,7 @@ private actor FakeLayoutBackend: LayoutBackend {
     var entered: CheckedContinuation<Void, Never>?
     var events: [String] = []
     var discoveryCount = 0
+    var failingDiscoveries: Set<Int> = []
     var additions: [Int: [DiscoveredItem]] = [:]
     var omitHidden = false
     var omitHiddenAfterDiscovery: Int?
@@ -30,17 +31,18 @@ private actor FakeLayoutBackend: LayoutBackend {
     func omitHiddenFromDiscovery() { omitHidden = true }
     func omitHiddenStartingWithDiscovery(_ count: Int) { omitHiddenAfterDiscovery = count }
     func addOnDiscovery(_ number: Int, items: [DiscoveredItem]) { additions[number] = items }
-    func discover() -> [DiscoveredItem] {
+    func failDiscoveries(_ numbers: Set<Int>) { failingDiscoveries = numbers }
+    func discover() throws -> [DiscoveredItem] {
         events.append("discover")
         discoveryCount += 1
+        if failingDiscoveries.contains(discoveryCount) { throw Failure.unavailable }
         items.append(contentsOf: additions[discoveryCount] ?? [])
         let shouldOmit = omitHidden || (omitHiddenAfterDiscovery.map { discoveryCount >= $0 } ?? false)
         return shouldOmit ? items.filter { !currentHidden.contains($0.bundleID ?? "") } : items
     }
-    func hasActiveVisibilityRestriction() -> Bool { !currentHidden.isEmpty }
+    func hasActiveVisibilityRestriction() async -> Bool { !currentHidden.isEmpty }
     func setHiddenApplications(_ bundleIDs: Set<String>) async throws {
         visibility.append(bundleIDs); events.append("visibility")
-        currentHidden = bundleIDs
         if blockNextVisibility {
             blockNextVisibility = false
             await withCheckedContinuation { continuation in
@@ -49,6 +51,7 @@ private actor FakeLayoutBackend: LayoutBackend {
             }
         }
         if failVisibility { throw Failure.unavailable }
+        currentHidden = bundleIDs
     }
     func waitUntilBlocked() async {
         if blocked != nil { return }
@@ -520,15 +523,90 @@ final class LayoutCoordinatorTests: XCTestCase {
         XCTAssertEqual(requests, [["org.a", "org.b"], ["org.b"]])
     }
 
-    func testFailOpenFailureIsReported() async {
+    func testVisibilityFailureIsReportedWithoutRequestingReveal() async {
         let backend = FakeLayoutBackend([item("a")])
         await backend.configure(failVisibility: true)
         let report = await LayoutCoordinator(backend: backend).apply(document([item("a")], hidden: ["a"]))
         XCTAssertEqual(report.status, .failed)
         XCTAssertNotNil(report.error)
-        XCTAssertNotNil(report.fallbackError)
+        XCTAssertNil(report.fallbackError)
         let requests = await backend.visibilityRequests()
+        XCTAssertEqual(requests, [["org.a"]])
+    }
+
+    func testPostHideDiscoveryFailurePreservesAcceptedRestriction() async {
+        let a = item("a")
+        let backend = FakeLayoutBackend([a])
+        await backend.failDiscoveries([2, 3])
+
+        let report = await LayoutCoordinator(backend: backend)
+            .apply(document([a], hidden: ["a"]), allowReordering: false)
+
+        XCTAssertEqual(report.status, .failed)
+        XCTAssertNotNil(report.error)
+        XCTAssertTrue(report.visibilityApplied)
+        let active = await backend.hasActiveVisibilityRestriction()
+        XCTAssertTrue(active)
+        let requests = await backend.visibilityRequests()
+        XCTAssertEqual(requests, [["org.a"]])
+    }
+
+    func testRejectedReplacementDoesNotClearPreviousRestriction() async {
+        let a = item("a")
+        let layout = document([a], hidden: ["a"])
+        let backend = FakeLayoutBackend([a])
+        await backend.omitHiddenFromDiscovery()
+        let coordinator = LayoutCoordinator(backend: backend)
+        _ = await coordinator.apply(layout, allowReordering: false)
+        await backend.configure(failVisibility: true)
+
+        let report = await coordinator.apply(document([a]), revealed: true, allowReordering: false)
+
+        XCTAssertEqual(report.status, .failed)
+        let active = await backend.hasActiveVisibilityRestriction()
+        XCTAssertTrue(active)
+        let requests = await backend.visibilityRequests()
+        // The explicit reveal fails; the error handler must not repeat it.
         XCTAssertEqual(requests, [["org.a"], []])
+    }
+
+    func testDelayedSystemVerificationFailurePreservesAllHiddenTargets() async {
+        let app = item("a")
+        let bluetooth = DiscoveredItem(bundleID: "com.apple.controlcenter", identifier: nil,
+            name: "Bluetooth", positionTableKey: "module:Bluetooth")
+        let layout = LayoutDocument(entries: [
+            document([app], hidden: ["a"]).entries[0],
+            LayoutEntry(id: "system-position:module:Bluetooth", bundleID: "com.apple.controlcenter",
+                name: "Bluetooth", group: .hidden)
+        ])
+        let backend = FakeLayoutBackend([app, bluetooth])
+        await backend.failDiscoveries([3])
+
+        let report = await LayoutCoordinator(backend: backend).apply(layout, allowReordering: false)
+
+        XCTAssertEqual(report.status, .failed)
+        XCTAssertTrue(report.visibilityApplied)
+        let requests = await backend.visibilityRequests()
+        XCTAssertEqual(requests, [["org.a", "system-item:1"]])
+    }
+
+    func testRefreshAfterPostHideDiscoveryFailureDoesNotReleaseRestriction() async {
+        let a = item("a")
+        let layout = document([a], hidden: ["a"])
+        let backend = FakeLayoutBackend([a])
+        await backend.omitHiddenFromDiscovery()
+        await backend.failDiscoveries([2, 3, 4])
+        let coordinator = LayoutCoordinator(backend: backend)
+
+        let first = await coordinator.apply(layout, allowReordering: false)
+        let refresh = await coordinator.apply(layout, allowReordering: false, currentVisibilityLayout: layout)
+        let recovered = await coordinator.apply(layout, allowReordering: false, currentVisibilityLayout: layout)
+
+        XCTAssertTrue(first.visibilityApplied)
+        XCTAssertTrue(refresh.visibilityApplied)
+        XCTAssertEqual(recovered.status, .applied)
+        let requests = await backend.visibilityRequests()
+        XCTAssertEqual(requests, [["org.a"]])
     }
 
     func testLatestRequestWaitsForBlockedOperationAndWins() async {

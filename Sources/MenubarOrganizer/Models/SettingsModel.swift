@@ -742,7 +742,16 @@ final class SettingsModel {
             case .superseded: break
             }
             if report.visibilityApplied, backend.visibility.isActive {
+                lastAppliedHiddenLayout = requested
                 finishAutomaticRecovery()
+                if report.error != nil {
+                    Logger(subsystem: "local.menubarorganizer.app", category: "visibility")
+                        .notice("Preserved accepted visibility restriction after layout diagnostic failure")
+                }
+                if pendingAutomaticRestore, restoreToken == restoreRevision {
+                    pendingRestore = false
+                    pendingAutomaticRestore = false
+                }
             }
             if pendingAutomaticRestore, !report.visibilityApplied,
                report.error == "expired" || report.error == "staleGeometry" || report.error == "timeBudgetExceeded" {
@@ -752,11 +761,7 @@ final class SettingsModel {
                 lastExplicitApplyFailure = statusMessage
                 requiresManualRetry = true
                 UserDefaults.standard.set(true, forKey: Self.manualRetryKey)
-                // A failed move does not invalidate a successfully applied
-                // visibility filter. Only clear it when visibility itself failed.
-                if !report.visibilityApplied {
-                    try? await backend.setHiddenApplications([])
-                }
+                // An unsuccessful apply does not authorize revealing items.
                 // The coordinator already discovered the post-move state.
                 // Keep the pending layout for an explicit retry without
                 // scheduling the same failed operation again.
@@ -1068,8 +1073,9 @@ final class SettingsModel {
                 guard token == visibilityRevision, !stopped else { return }
                 timer?.cancel(); timer = nil
                 awaitingReveal = false
-                _ = reveal.suspend(reason: .backendUnavailable)
-                try? await backend.setHiddenApplications([])
+                if backend.visibility.isActive {
+                    reveal.confirmVisibility(.hidden)
+                }
                 guard token == visibilityRevision, !stopped else { return }
                 statusMessage = backendErrorMessage(error)
             }
